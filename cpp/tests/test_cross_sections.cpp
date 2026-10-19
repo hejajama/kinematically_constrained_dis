@@ -1,10 +1,9 @@
 // Integrated structure functions against the Python implementation.
 //
-// These run full Vegas integrations and are in the doctest suite
-// "integration" (ctest -R integration). C++ and Python results are
-// independent Monte Carlo estimates, so they are compared through the pull
-// (difference over the combined error), except for OT, which has a
-// deterministic quadrature reference.
+// These run full integrations, with Cuhre and with Vegas, and are in the
+// doctest suite "integration" (ctest -R integration). They are compared with
+// the Python results through the pull (difference over the combined error),
+// and OT also with a deterministic quadrature reference.
 
 #include <algorithm>
 #include <cmath>
@@ -27,11 +26,18 @@ const Dipole &mv_dipole() {
     return dipole;
 }
 
-dis::VegasSettings settings(long long mcpoints) {
-    dis::VegasSettings s;
-    s.mcpoints = mcpoints;
-    s.seed = 11;
-    s.nbatch = 10000;
+dis::IntegrationSettings vegas(long long mcpoints) {
+    dis::IntegrationSettings s;
+    s.integrator = dis::Integrator::vegas;
+    s.vegas.mcpoints = mcpoints;
+    s.vegas.seed = 11;
+    return s;
+}
+
+dis::IntegrationSettings cuhre(double epsrel) {
+    dis::IntegrationSettings s;
+    s.integrator = dis::Integrator::cuhre;
+    s.cuhre.epsrel = epsrel;
     return s;
 }
 
@@ -85,10 +91,47 @@ void check_against_python_fe5d(const dis::StructureFunctions &sf) {
 }  // namespace
 
 TEST_SUITE("integration") {
-    // Default sampling (see dis::Sampling).
+    // Cuhre, the default integrator, with the default sampling.
 
-    TEST_CASE("OT structure functions match the quadrature reference") {
-        const auto sf = dis::ot_structure_functions(kin, mv_dipole(), settings(1000000));
+    TEST_CASE("Cuhre: OT structure functions match the quadrature reference") {
+        const auto sf = dis::ot_structure_functions(kin, mv_dipole(), cuhre(1e-7));
+        const ReferenceTable ref("integrated_OT_quadrature.txt");
+        CHECK(sf.fail == 0);
+        CHECK(sf.FL == doctest::Approx(ref(0, "FL")).epsilon(1e-7));
+        CHECK(sf.FT == doctest::Approx(ref(0, "FT")).epsilon(1e-7));
+        CHECK(std::abs(sf.FL - ref(0, "FL")) <= sf.FL_err);
+        CHECK(std::abs(sf.FT - ref(0, "FT")) <= sf.FT_err);
+    }
+
+    TEST_CASE("Cuhre: FE 4D and 5D structure functions match Python") {
+        const auto fe4d = dis::fe4d_structure_functions(kin, mv_dipole(), false, cuhre(1e-3));
+        CHECK(fe4d.fail == 0);
+        check_against_python("integrated_xB1e-3_mc1e7_8cores.txt", "FE_4D", fe4d);
+        const auto fe5d = dis::fe5d_structure_functions(kin, mv_dipole(), false, cuhre(1e-3));
+        CHECK(fe5d.fail == 0);
+        check_against_python_fe5d(fe5d);
+
+        const std::string file = "integrated_xB1e-3_mc1e6_largeNc_8cores.txt";
+        check_against_python(file, "FE_4D",
+                             dis::fe4d_structure_functions(kin, mv_dipole(), true, cuhre(1e-3)));
+        check_against_python(file, "FE_5D",
+                             dis::fe5d_structure_functions(kin, mv_dipole(), true, cuhre(1e-3)));
+    }
+
+    TEST_CASE("Cuhre: the error estimate covers the change to a 10x tighter epsrel") {
+        // Cuhre's error estimate is not statistical; check it against a more
+        // accurate result instead.
+        const auto coarse = dis::fe5d_structure_functions(kin, mv_dipole(), false, cuhre(1e-3));
+        const auto fine = dis::fe5d_structure_functions(kin, mv_dipole(), false, cuhre(1e-4));
+        CHECK(std::abs(coarse.FL - fine.FL) <= coarse.FL_err);
+        CHECK(std::abs(coarse.FT - fine.FT) <= coarse.FT_err);
+        CHECK(fine.FL_err < 0.2 * coarse.FL_err);
+    }
+
+    // Vegas with the default sampling.
+
+    TEST_CASE("Vegas: OT structure functions match the quadrature reference") {
+        const auto sf = dis::ot_structure_functions(kin, mv_dipole(), vegas(1000000));
         const ReferenceTable ref("integrated_OT_quadrature.txt");
         // The quadrature error is ~1e-13, negligible.
         check_pull("OT FL", sf.FL, sf.FL_err, ref(0, "FL"), 0);
@@ -98,36 +141,36 @@ TEST_SUITE("integration") {
         CHECK(sf.FT_err < 1e-3 * sf.FT);
     }
 
-    TEST_CASE("FE 4D structure functions match Python, finite Nc") {
-        const auto sf = dis::fe4d_structure_functions(kin, mv_dipole(), false, settings(1000000));
+    TEST_CASE("Vegas: FE 4D structure functions match Python, finite Nc") {
+        const auto sf = dis::fe4d_structure_functions(kin, mv_dipole(), false, vegas(1000000));
         check_against_python("integrated_xB1e-3_mc1e7_8cores.txt", "FE_4D", sf);
         CHECK(sf.FL_err < 3e-3 * sf.FL);
     }
 
-    TEST_CASE("FE 5D structure functions match Python, finite Nc") {
-        const auto sf = dis::fe5d_structure_functions(kin, mv_dipole(), false, settings(1000000));
+    TEST_CASE("Vegas: FE 5D structure functions match Python, finite Nc") {
+        const auto sf = dis::fe5d_structure_functions(kin, mv_dipole(), false, vegas(1000000));
         check_against_python_fe5d(sf);
         // Integrated by parts, the error is far below that of the original form.
         CHECK(sf.FL_err < 3e-3 * sf.FL);
         CHECK(sf.FT_err < 3e-3 * sf.FT);
     }
 
-    TEST_CASE("FE 4D and 5D structure functions match Python, large Nc") {
+    TEST_CASE("Vegas: FE 4D and 5D structure functions match Python, large Nc") {
         const std::string file = "integrated_xB1e-3_mc1e6_largeNc_8cores.txt";
         check_against_python(file, "FE_4D",
-                             dis::fe4d_structure_functions(kin, mv_dipole(), true, settings(1000000)));
+                             dis::fe4d_structure_functions(kin, mv_dipole(), true, vegas(1000000)));
         check_against_python(file, "FE_5D",
-                             dis::fe5d_structure_functions(kin, mv_dipole(), true, settings(1000000)));
+                             dis::fe5d_structure_functions(kin, mv_dipole(), true, vegas(1000000)));
     }
 
-    // The variables of the Python code.
+    // Vegas with the variables of the Python code.
 
-    TEST_CASE("Python variables: FE 4D and 5D structure functions match Python") {
+    TEST_CASE("Vegas, Python variables: FE 4D and 5D structure functions match Python") {
         const auto python = dis::Sampling::python();
         check_against_python(
             "integrated_xB1e-3_mc1e7_8cores.txt", "FE_4D",
-            dis::fe4d_structure_functions(kin, mv_dipole(), false, settings(1000000), python));
+            dis::fe4d_structure_functions(kin, mv_dipole(), false, vegas(1000000), python));
         check_against_python_fe5d(
-            dis::fe5d_structure_functions(kin, mv_dipole(), false, settings(1000000), python));
+            dis::fe5d_structure_functions(kin, mv_dipole(), false, vegas(1000000), python));
     }
 }

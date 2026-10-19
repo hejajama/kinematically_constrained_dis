@@ -15,7 +15,7 @@ set(TEST_SOURCES
     test_wavefunctions.cpp
     test_quadrupole.cpp
     test_integrands.cpp
-    test_vegas.cpp
+    test_integration.cpp
     test_sampling.cpp
     test_cross_sections.cpp
     )

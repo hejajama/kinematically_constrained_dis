@@ -27,7 +27,7 @@ struct Options {
     bool largeNc = false;
     std::string interpolation = dis::BicubicSpline::name;
     std::set<std::string> only;  // empty: all
-    dis::VegasSettings vegas;
+    dis::IntegrationSettings integration;
     dis::Sampling sampling;
 };
 
@@ -46,15 +46,22 @@ void usage(const char *prog) {
         << "  --Qs0, --gamma, --ec   accepted for compatibility, unused (taken from the BK file)\n"
         << "\n"
         << "Numerics:\n"
-        << "  --mcpoints N     points per Vegas iteration (500000)\n"
+        << "  --integrator NAME   cuhre (default, deterministic cubature) or vegas (Monte Carlo)\n"
         << "  --interpolation NAME   bicubic (default, as the Python code) or bilinear\n"
         << "  --only CALC      OT, FE_4D or FE_5D; may be repeated (default: all)\n"
-        << "  --seed S         random seed, 0 = Sobol quasi-random (1)\n"
         << "  --cores N        worker processes, 0 = none (default: CUBACORES or idle cores)\n"
-        << "  --nbatch N       Vegas batch size (10000)\n"
+        << "  --verbose V      Cuba verbosity 0-3 (0)\n"
+        << "\n"
+        << "Cuhre:\n"
+        << "  --epsrel E       target relative error (1e-3)\n"
+        << "  --maxeval N      at most N integrand evaluations per integral (5e7)\n"
+        << "\n"
+        << "Vegas:\n"
+        << "  --mcpoints N     points per iteration (500000)\n"
+        << "  --seed S         random seed, 0 = Sobol quasi-random (1)\n"
+        << "  --nbatch N       batch size (10000)\n"
         << "  --iterations N   main-run iterations (20)\n"
         << "  --warmup N       warm-up iterations with mcpoints/10 points (10)\n"
-        << "  --verbose V      Cuba verbosity 0-3 (0)\n"
         << "\n"
         << "Sampling (see cross_sections.hpp; all compute the same integral):\n"
         << "  --variables python|optimized   python: the variables of the Python code;\n"
@@ -84,15 +91,21 @@ Options parse(int argc, char **argv) {
         else if (arg == "--Qs0" || arg == "--gamma" || arg == "--ec") value();
         else if (arg == "--bkfile") o.bkfile = value();
         else if (arg == "--largeNc") o.largeNc = true;
-        else if (arg == "--mcpoints") o.vegas.mcpoints = std::stoll(value());
+        else if (arg == "--integrator")
+            o.integration.integrator = dis::integrator_from_name(value());
+        else if (arg == "--epsrel") o.integration.cuhre.epsrel = std::stod(value());
+        else if (arg == "--maxeval") o.integration.cuhre.maxeval = std::llround(std::stod(value()));
+        else if (arg == "--mcpoints") o.integration.vegas.mcpoints = std::stoll(value());
         else if (arg == "--interpolation") o.interpolation = value();
         else if (arg == "--only") o.only.insert(value());
-        else if (arg == "--seed") o.vegas.seed = std::stoi(value());
-        else if (arg == "--cores") o.vegas.cores = std::stoi(value());
-        else if (arg == "--nbatch") o.vegas.nbatch = std::stoll(value());
-        else if (arg == "--iterations") o.vegas.iterations = std::stoi(value());
-        else if (arg == "--warmup") o.vegas.warmup_iterations = std::stoi(value());
-        else if (arg == "--verbose") o.vegas.verbose = std::stoi(value());
+        else if (arg == "--seed") o.integration.vegas.seed = std::stoi(value());
+        else if (arg == "--cores")
+            o.integration.vegas.cores = o.integration.cuhre.cores = std::stoi(value());
+        else if (arg == "--nbatch") o.integration.vegas.nbatch = std::stoll(value());
+        else if (arg == "--iterations") o.integration.vegas.iterations = std::stoi(value());
+        else if (arg == "--warmup") o.integration.vegas.warmup_iterations = std::stoi(value());
+        else if (arg == "--verbose")
+            o.integration.vegas.verbose = o.integration.cuhre.verbose = std::stoi(value());
         else if (arg == "--variables") {
             const std::string v = value();
             if (v == "python") o.sampling = dis::Sampling::python();
@@ -126,6 +139,9 @@ void run(const Options &o) {
         std::cerr << "Warning: Y = log(x0/xB) = " << Y_fixed << " is outside the tabulated range ["
                   << table.Y_min() << ", " << table.Y_max() << "] of " << o.bkfile << "\n";
 
+    // Same columns as test_bk_integration.py. With Cuhre, which has no
+    // mcpoints, that column holds the number of integrand evaluations.
+    const bool vegas = o.integration.integrator == dis::Integrator::vegas;
     std::printf("calc, Q2, xB, m, largeNc, mcpoints, FL, FL_err, FT, FT_err, F2, F2_err\n");
     auto run_one = [&](const char *calc, auto compute) {
         if (!o.only.empty() && !o.only.count(calc)) return;
@@ -133,19 +149,28 @@ void run(const Options &o) {
         const dis::StructureFunctions sf = compute();
         const std::chrono::duration<double> elapsed = std::chrono::steady_clock::now() - start;
         std::printf("%s, %.17g, %.17g, %.17g, %d, %lld, %.17g, %.17g, %.17g, %.17g, %.17g, %.17g\n",
-                    calc, o.kin.Q * o.kin.Q, o.kin.xB, o.kin.mf, int(o.largeNc), o.vegas.mcpoints,
-                    sf.FL, sf.FL_err, sf.FT, sf.FT_err, sf.F2(), sf.F2_err());
+                    calc, o.kin.Q * o.kin.Q, o.kin.xB, o.kin.mf, int(o.largeNc),
+                    vegas ? o.integration.vegas.mcpoints : sf.neval, sf.FL, sf.FL_err, sf.FT,
+                    sf.FT_err, sf.F2(), sf.F2_err());
         std::fflush(stdout);
-        std::fprintf(stderr, "%s: %.3f s, chi2 prob L %.3g T %.3g\n", calc, elapsed.count(),
-                     sf.FL_chi2_prob, sf.FT_chi2_prob);
+        std::fprintf(stderr, "%s: %.3f s, %lld evaluations", calc, elapsed.count(), sf.neval);
+        if (vegas)
+            std::fprintf(stderr, ", chi2 prob L %.3g T %.3g", sf.FL_chi2_prob, sf.FT_chi2_prob);
+        std::fprintf(stderr, "\n");
+        if (!vegas && sf.fail != 0)
+            std::fprintf(stderr,
+                         "Warning: %s: Cuhre did not reach epsrel = %g within maxeval = %lld "
+                         "evaluations; the errors are its estimate at that point.\n",
+                         calc, o.integration.cuhre.epsrel, o.integration.cuhre.maxeval);
     };
 
-    run_one("OT", [&] { return dis::ot_structure_functions(o.kin, dipole, o.vegas, o.sampling); });
+    run_one("OT",
+            [&] { return dis::ot_structure_functions(o.kin, dipole, o.integration, o.sampling); });
     run_one("FE_4D", [&] {
-        return dis::fe4d_structure_functions(o.kin, dipole, o.largeNc, o.vegas, o.sampling);
+        return dis::fe4d_structure_functions(o.kin, dipole, o.largeNc, o.integration, o.sampling);
     });
     run_one("FE_5D", [&] {
-        return dis::fe5d_structure_functions(o.kin, dipole, o.largeNc, o.vegas, o.sampling);
+        return dis::fe5d_structure_functions(o.kin, dipole, o.largeNc, o.integration, o.sampling);
     });
 }
 

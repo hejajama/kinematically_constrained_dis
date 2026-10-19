@@ -8,8 +8,8 @@ A C++ port of the BK-evolved DIS structure function calculation of
 - `FE_4D`: finite-energy constrained, BK evolved in xB;
 - `FE_5D`: finite-energy constrained, BK evolved in xP.
 
-It takes the same command line options as that script and prints the same CSV table. Integration uses Vegas from
-[Cuba 4.2.2](http://www.feynarts.de/cuba/), vendored in `external/`.
+It takes the same command line options as that script and prints the same CSV table. Integration uses Cuhre (by
+default) or Vegas from [Cuba 4.2.2](http://www.feynarts.de/cuba/), vendored in `external/`.
 
 ## Build
 
@@ -32,26 +32,52 @@ cpp/build/bin/dis_xs --bkfile data/mv.dat --xB 1e-3 --mcpoints 100000
 
 `--help` lists all options. Besides the physics options of the Python script, it accepts:
 
+- `--integrator cuhre|vegas`: the integration routine (see below);
+- `--epsrel E`, `--maxeval N`: Cuhre's target relative error (default 1e-3) and evaluation limit (default 5e7);
+- `--mcpoints N`, `--seed S`, `--nbatch`, `--iterations`, `--warmup`: Vegas settings; seed `0` selects Sobol
+  quasi-random numbers;
 - `--interpolation bicubic|bilinear`: the dipole interpolation;
 - `--only OT|FE_4D|FE_5D`: compute only these rows; can be repeated;
-- `--seed S`: random seed; `0` selects Sobol quasi-random numbers;
 - `--cores N`: number of worker processes; `0` means none;
-- `--nbatch`, `--iterations`, `--warmup`, `--verbose`: Vegas settings;
+- `--verbose V`: Cuba's verbosity, 0–3;
 - `--variables python`: sample the same variables as the Python code (see below).
 
-Timings go to stderr.
+Timings, the number of evaluations and Cuhre warnings go to stderr. With Cuhre, the `mcpoints` column of the CSV holds
+the number of integrand evaluations.
 
-L and T come out of one Vegas run, as two components sharing each evaluation of the dipoles and the quadrupole. The
-Python code runs a separate integration per polarization. As in the Python code, a warm-up of 10 iterations of
-`mcpoints/10` points trains the Vegas grid and is discarded, then 20 iterations of `mcpoints` points give the result.
+L and T are computed in one integration, as two components sharing each evaluation of the dipoles and the quadrupole.
+The Python code runs a separate integration per polarization. Measured over 5 seeds, separate integrations give
+10–15% smaller FE errors at equal points per polarization, but cost twice the time. At equal time, the combined run is
+better.
 
 By default Cuba evaluates the integrand in forked worker processes. Their number comes from `CUBACORES`, otherwise from
 the number of idle cores.
 
+### Integration routine
+
+**Cuhre (default)** is deterministic adaptive cubature. It subdivides the integration region until the estimated error
+is below `epsrel` times the result, or until `maxeval` evaluations, in which case it prints a warning. At xB = 1e-3 on
+8 cores:
+
+- **`epsrel` 1e-3:** OT takes milliseconds, FE_4D and FE_5D about 1 s each.
+- **`epsrel` 1e-4:** OT still takes milliseconds, FE_4D and FE_5D about 7–10 s each.
+
+The error estimate compares cubature rules of different degree. It is not statistical, so it cannot be checked by
+changing the seed. Check it by repeating with a 10× smaller `epsrel`: at xB = 1e-3 it covered the difference with
+room to spare. Cuhre keeps all subregions in memory, and beyond a few 10⁷ evaluations it slows down noticeably.
+
+**Vegas** is adaptive Monte Carlo, as used by the Python code. As there, a warm-up of 10 iterations of `mcpoints/10`
+points trains the grid and is discarded, then 20 iterations of `mcpoints` points give the result. Its errors are
+statistical and can be checked over seeds.
+
+Compared with Vegas at the same number of evaluations, Cuhre's errors are 20–25× smaller for FE. For OT, Cuhre gives
+the integral to 1e-9 in 0.1 s, a precision Vegas cannot reach. Suave and Divonne from Cuba were also tested: Suave was
+no better than Vegas for FE and was biased with small subdivisions, and Divonne was 25–450× slower.
+
 ### Integration variables
 
 The C++ code computes the same integrals as the Python code over the same domains, but by default it samples them in
-variables that Vegas handles better (`Sampling` in `src/cross_sections.hpp`). `--variables python` switches all of this
+variables that the integrators handle better (`Sampling` in `src/cross_sections.hpp`). `--variables python` switches all of this
 off, and single options can be switched off one at a time (see `--help`).
 
 - **Relative coordinates for FE.** The phase-space kernel is sharply peaked at u⃗ = u⃗′, with a width of about
@@ -72,8 +98,12 @@ off, and single options can be switched off one at a time (see `--help`).
 At 1e6 points this makes the FE_4D error 1.8–1.9× smaller and the FE_5D error 12–16× smaller than with the Python
 variables. Over repeated seeds, the reported errors match the actual scatter.
 
-OT gains nothing from this. Classic Vegas, which Cuba implements, cannot match the stratified sampling of Python's
-vegas package for this smooth 2D integrand: at equal points, its error is 50–70× larger.
+The numbers above are for Vegas. These variables are also what lets Cuhre work so well: in the Python variables, the
+peaked and oscillating FE integrands are much harder for cubature too.
+
+OT gains nothing from this with Vegas. Classic Vegas, which Cuba implements, cannot match the stratified sampling of
+Python's vegas package for this smooth 2D integrand: at equal points, its error is 50–70× larger. Cuhre has no such
+problem.
 
 ## Tests
 
@@ -92,10 +122,11 @@ ctest runs two entries:
 
   It also tests exact properties: the spline reproduces polynomials and grid nodes, and the quadrupole has the right
   limits. It checks what the integration variables rely on: the symmetries, the relative coordinates, and the FE_5D
-  integration by parts, against a 1D quadrature over M²_qq. Finally it checks the Vegas wrapper, including that the
-  forked workers give the serial result.
-- **`integration`** takes about 15 s on 8 cores. It runs the full integrations, with the default variables and with
-  the Python ones, and compares them with the Python results. OT is compared with a quadrature result. FE_4D and FE_5D
+  integration by parts, against a 1D quadrature over M²_qq. Finally it checks the Cuhre and Vegas wrappers, including
+  that the forked workers give the serial result.
+- **`integration`** takes about 35 s on 8 cores. It runs the full integrations with Cuhre and with Vegas, with the
+  default variables and with the Python ones, and compares them with the Python results. For Cuhre it also checks that
+  the error estimate covers the change to a 10× smaller `epsrel`. OT is compared with a quadrature result. FE_4D and FE_5D
   must agree with the Python Monte Carlo results within 4 standard deviations of the combined error. For FE_5D the
   reference is the mean of three Python runs, with the error taken from their scatter.
 
@@ -127,7 +158,7 @@ each worker re-runs the whole calculation.
 | `src/wavefunctions.hpp` | LO photon wavefunctions squared, OT and FE |
 | `src/quadrupole.hpp` | Gaussian quadrupole from six dipoles, finite and large Nc |
 | `src/integrands.hpp` | OT, FE 4D and FE 5D integrands, the FE 5D correction term of the integration by parts |
-| `src/vegas.*` | Cuba Vegas wrapper |
+| `src/integration.*` | Cuba Cuhre and Vegas wrappers, axis mappings |
 | `src/cross_sections.hpp` | structure functions from the integrands; integration variables (`Sampling`) |
 | `src/special_functions.*` | Bessel functions (Boost.Math, or GSL with `-Duse_boost=OFF`) |
 | `src/main.cpp` | command line program |

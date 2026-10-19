@@ -2,7 +2,7 @@ add_library(dis_lib STATIC
     special_functions.cpp
     rcbk_table.cpp
     interpolation.cpp
-    vegas.cpp
+    integration.cpp
     )
 target_include_directories(dis_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(dis_lib PUBLIC cuba)

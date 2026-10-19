@@ -1,12 +1,12 @@
-# Vegas from Cuba 4.2.2 (http://www.feynarts.de/cuba/, LGPL, see COPYING),
-# reduced to the sources Vegas needs.
+# Vegas and Cuhre from Cuba 4.2.2 (http://www.feynarts.de/cuba/, LGPL, see
+# COPYING), reduced to the sources these two need.
 #
 # Cuba's configure script would write config.h; here the few HAVE_* macros it
 # uses are set from CMake checks instead, and HAVE_CONFIG_H is left undefined
 # so stddecl.h does not look for config.h. With HAVE_FORK, Cuba evaluates the
 # integrand in forked worker processes (number set by CUBACORES or cubacores()).
 #
-# Everything is compiled with LONGLONGINT, which provides llVegas: 64-bit
+# Everything is compiled with LONGLONGINT, which provides llVegas and llCuhre: 64-bit
 # evaluation counts, so that 20 iterations of 1e8 points do not overflow.
 # This must apply to Fork.c as well as Vegas.c: they share structures with
 # count fields, and with Fork.c built for int counts the forked workers hang
@@ -30,13 +30,19 @@ message(STATUS "Cuba definitions: ${CUBA_DEFINITIONS}")
 
 add_library(cuba STATIC
     src/vegas/Vegas.c
+    src/cuhre/Cuhre.c
     src/common/Fork.c
     src/common/Global.c
     src/common/Data.c
     )
 target_include_directories(cuba
     PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}
-    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/common ${CMAKE_CURRENT_SOURCE_DIR}/src/vegas)
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/common)
+# Each algorithm has its own decl.h and common.c, so the include path is per file.
+set_source_files_properties(src/vegas/Vegas.c PROPERTIES
+    INCLUDE_DIRECTORIES ${CMAKE_CURRENT_SOURCE_DIR}/src/vegas)
+set_source_files_properties(src/cuhre/Cuhre.c PROPERTIES
+    INCLUDE_DIRECTORIES ${CMAKE_CURRENT_SOURCE_DIR}/src/cuhre)
 target_compile_definitions(cuba PRIVATE ${CUBA_DEFINITIONS})
 # Cuba does not compile under C23 (it declares bool-like names), so pin C17.
 set_target_properties(cuba PROPERTIES C_STANDARD 17 C_STANDARD_REQUIRED ON C_EXTENSIONS ON)

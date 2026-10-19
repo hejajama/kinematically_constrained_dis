@@ -4,7 +4,7 @@
 //
 // How the integration variables are sampled is set by Sampling. Every choice
 // computes the same integral over the same domain; they differ in how well
-// Vegas can adapt to the integrand, i.e. in the error for a given number of
+// the integrator can adapt to the integrand, i.e. in the error for a given number of
 // points. Sampling::python() reproduces the variables of the Python code.
 
 #ifndef DIS_CROSS_SECTIONS_HPP
@@ -16,7 +16,7 @@
 
 #include "constants.hpp"
 #include "integrands.hpp"
-#include "vegas.hpp"
+#include "integration.hpp"
 
 namespace dis {
 
@@ -48,10 +48,11 @@ struct Sampling {
     // boundary term plus a 5D correction where the dipole depends on M_qq^2.
     // The same integral, with a far smaller Monte Carlo error.
     bool fe5d_by_parts = true;
-    // Points of the correction relative to the boundary term. The correction
-    // is the smaller part with a much smaller variance (at xB = 1e-3, 10-20%
-    // of the result with a 20-35x smaller error at equal points), so a tenth
-    // of the points changes the total error by ~1%.
+    // Vegas: points of the correction relative to the boundary term. The
+    // correction is the smaller part with a much smaller variance (at
+    // xB = 1e-3, 10-20% of the result with a 20-35x smaller error at equal
+    // points), so a tenth of the points changes the total error by ~1%.
+    // (Cuhre integrates both parts to the same relative accuracy.)
     double fe5d_correction_points = 0.1;
     // Use the exact symmetries z <-> 1 - z (quark <-> antiquark) and
     // angle <-> -angle (reflection): integrate z over [z_min, 1/2] and the angle
@@ -72,6 +73,7 @@ struct StructureFunctions {
     double FL = 0, FL_err = 0, FT = 0, FT_err = 0;
     double FL_chi2_prob = 0, FT_chi2_prob = 0;
     long long neval = 0;
+    int fail = 0;  // the integrator's fail flag (see IntegrationResult)
 
     double F2() const { return FL + FT; }
     double F2_err() const { return std::hypot(FL_err, FT_err); }
@@ -79,7 +81,7 @@ struct StructureFunctions {
 
 namespace detail {
 
-inline StructureFunctions to_structure_functions(const Kinematics &k, const VegasResult &r,
+inline StructureFunctions to_structure_functions(const Kinematics &k, const IntegrationResult &r,
                                                  double factor) {
     const double prefactor = factor * k.Q * k.Q / (4 * pi * pi * alpha_em);
     StructureFunctions sf;
@@ -90,6 +92,7 @@ inline StructureFunctions to_structure_functions(const Kinematics &k, const Vega
     sf.FL_chi2_prob = r.chi2_prob[0];
     sf.FT_chi2_prob = r.chi2_prob[1];
     sf.neval = r.neval;
+    sf.fail = r.fail;
     return sf;
 }
 
@@ -103,6 +106,7 @@ inline StructureFunctions sum(const StructureFunctions &a, const StructureFuncti
     sf.FL_chi2_prob = std::min(a.FL_chi2_prob, b.FL_chi2_prob);
     sf.FT_chi2_prob = std::min(a.FT_chi2_prob, b.FT_chi2_prob);
     sf.neval = a.neval + b.neval;
+    sf.fail = a.fail != 0 ? a.fail : b.fail;
     return sf;
 }
 
@@ -144,18 +148,18 @@ inline FECoordinates fe_coordinates(const Sampling &s) {
 
 template <class Dipole>
 StructureFunctions ot_structure_functions(const Kinematics &k, const Dipole &dipole,
-                                          const VegasSettings &settings,
+                                          const IntegrationSettings &settings,
                                           const Sampling &sampling = {},
                                           const IntegrationLimits &lim = {}) {
     const OTIntegrand<Dipole> f(k, dipole);
     const Limits limits = {detail::size_axis(lim, sampling), detail::z_axis(lim, sampling)};
     const double factor = sampling.symmetries ? 2 : 1;
-    return detail::to_structure_functions(k, integrate_vegas(f, limits, settings), factor);
+    return detail::to_structure_functions(k, integrate(f, limits, settings), factor);
 }
 
 template <class Dipole>
 StructureFunctions fe4d_structure_functions(const Kinematics &k, const Dipole &dipole,
-                                            bool largeNc, const VegasSettings &settings,
+                                            bool largeNc, const IntegrationSettings &settings,
                                             const Sampling &sampling = {},
                                             const IntegrationLimits &lim = {}) {
     const FE4DIntegrand<Dipole> f(k, dipole, largeNc, detail::fe_coordinates(sampling), lim.r_min,
@@ -163,12 +167,12 @@ StructureFunctions fe4d_structure_functions(const Kinematics &k, const Dipole &d
     Limits limits = detail::fe_pair_axes(lim, sampling);
     limits.push_back(detail::z_axis(lim, sampling));
     const double factor = sampling.symmetries ? 4 : 1;
-    return detail::to_structure_functions(k, integrate_vegas(f, limits, settings), factor);
+    return detail::to_structure_functions(k, integrate(f, limits, settings), factor);
 }
 
 template <class Dipole>
 StructureFunctions fe5d_structure_functions(const Kinematics &k, const Dipole &dipole,
-                                            bool largeNc, const VegasSettings &settings,
+                                            bool largeNc, const IntegrationSettings &settings,
                                             const Sampling &sampling = {},
                                             const IntegrationLimits &lim = {}) {
     const auto coords = detail::fe_coordinates(sampling);
@@ -181,7 +185,7 @@ StructureFunctions fe5d_structure_functions(const Kinematics &k, const Dipole &d
         const FE5DIntegrand<Dipole> f(k, dipole, largeNc, coords, lim.r_min, lim.r_max);
         limits.push_back(
             {IntegrationLimits::Mqq_sq_min(k), IntegrationLimits::Mqq_sq_max(k), M_scale});
-        return detail::to_structure_functions(k, integrate_vegas(f, limits, settings), factor);
+        return detail::to_structure_functions(k, integrate(f, limits, settings), factor);
     }
 
     // Boundary term: the FE 4D integrand at the rapidity of M_qq^2 = W^2.
@@ -189,7 +193,7 @@ StructureFunctions fe5d_structure_functions(const Kinematics &k, const Dipole &d
     const double Y_at_W2 = std::log(k.x0 * (k.W2() + Q2) / (IntegrationLimits::Mqq_sq_max(k) + Q2));
     const FE4DIntegrand<Dipole> boundary(k, dipole, Y_at_W2, largeNc, coords, lim.r_min, lim.r_max);
     const StructureFunctions sf_boundary =
-        detail::to_structure_functions(k, integrate_vegas(boundary, limits, settings), factor);
+        detail::to_structure_functions(k, integrate(boundary, limits, settings), factor);
 
     // Correction, over the part of the M_qq^2 range where the dipole depends on it.
     const FE5DCorrectionIntegrand<Dipole> correction(k, dipole, largeNc, coords, lim.r_min,
@@ -198,11 +202,11 @@ StructureFunctions fe5d_structure_functions(const Kinematics &k, const Dipole &d
     const double M_hi = std::min(IntegrationLimits::Mqq_sq_max(k), correction.Mqq_sq_hi());
     if (!(M_hi > M_lo)) return sf_boundary;
     limits.push_back({M_lo, M_hi, M_scale});
-    VegasSettings correction_settings = settings;
-    correction_settings.mcpoints = std::max(
-        1000LL, static_cast<long long>(sampling.fe5d_correction_points * settings.mcpoints));
+    IntegrationSettings correction_settings = settings;
+    correction_settings.vegas.mcpoints = std::max(
+        1000LL, static_cast<long long>(sampling.fe5d_correction_points * settings.vegas.mcpoints));
     const StructureFunctions sf_correction = detail::to_structure_functions(
-        k, integrate_vegas(correction, limits, correction_settings), factor);
+        k, integrate(correction, limits, correction_settings), factor);
     return detail::sum(sf_boundary, sf_correction);
 }
 
