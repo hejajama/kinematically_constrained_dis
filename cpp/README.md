@@ -36,7 +36,8 @@ cpp/build/bin/dis_xs --bkfile data/mv.dat --xB 1e-3 --mcpoints 100000
 - `--only OT|FE_4D|FE_5D`: compute only these rows; can be repeated;
 - `--seed S`: random seed; `0` selects Sobol quasi-random numbers;
 - `--cores N`: number of worker processes; `0` means none;
-- `--nbatch`, `--iterations`, `--warmup`, `--verbose`: Vegas settings.
+- `--nbatch`, `--iterations`, `--warmup`, `--verbose`: Vegas settings;
+- `--variables python`: sample the same variables as the Python code (see below).
 
 Timings go to stderr.
 
@@ -46,6 +47,33 @@ Python code runs a separate integration per polarization. As in the Python code,
 
 By default Cuba evaluates the integrand in forked worker processes. Their number comes from `CUBACORES`, otherwise from
 the number of idle cores.
+
+### Integration variables
+
+The C++ code computes the same integrals as the Python code over the same domains, but by default it samples them in
+variables that Vegas handles better (`Sampling` in `src/cross_sections.hpp`). `--variables python` switches all of this
+off, and single options can be switched off one at a time (see `--help`).
+
+- **Relative coordinates for FE.** The phase-space kernel is sharply peaked at u⃗ = u⃗′, with a width of about
+  1/√(M²_max z(1−z)) ≈ 0.05 GeV⁻¹ at xB = 1e-3. In the Python variables (u, u′, θ) the peak lies along a diagonal of the
+  integration box, where Vegas cannot adapt to it. There the integrand's variance is infinite: estimates drift with
+  the number of points, and the reported errors are too small. The C++ code integrates over u, r = |u⃗ − u⃗′| (log
+  scale) and the angle of u⃗ − u⃗′ instead.
+- **FE_5D integrated by parts in M²_qq.** In the original form, J0 oscillates over the whole M² range up to W², and the
+  M² integral builds the peak above only by cancellation. Integrating by parts gives the FE_4D integrand with the
+  dipole at xP = 1, plus a correction proportional to dT/dY (T the target amplitude). The correction vanishes
+  wherever the dipole does not depend on Y: for a BK solution that is xP > x0, most of the M² range. The derivation is
+  in the comment of `FE5DCorrectionIntegrand` in `src/integrands.hpp`. The correction gets a tenth of the points, since
+  its variance is much smaller.
+- **Symmetries.** z ↔ 1−z and angle ↔ −angle are exact symmetries, so z runs over [z_min, ½] and the angle over
+  [0, π].
+- **Dipole sizes on a log scale.**
+
+At 1e6 points this makes the FE_4D error 1.8–1.9× smaller and the FE_5D error 12–16× smaller than with the Python
+variables. Over repeated seeds, the reported errors match the actual scatter.
+
+OT gains nothing from this. Classic Vegas, which Cuba implements, cannot match the stratified sampling of Python's
+vegas package for this smooth 2D integrand: at equal points, its error is 50–70× larger.
 
 ## Tests
 
@@ -63,10 +91,13 @@ ctest runs two entries:
   - the three integrands, at finite and large Nc.
 
   It also tests exact properties: the spline reproduces polynomials and grid nodes, and the quadrupole has the right
-  limits. Finally it checks the Vegas wrapper, including that the forked workers give the serial result.
-- **`integration`** takes about 15 s on 8 cores. It runs the full integrations and compares them with the Python
-  results. OT is compared with a quadrature result; FE_4D and FE_5D are required to agree with the Python Monte Carlo
-  result within 4 standard deviations of the combined error.
+  limits. It checks what the integration variables rely on: the symmetries, the relative coordinates, and the FE_5D
+  integration by parts, against a 1D quadrature over M²_qq. Finally it checks the Vegas wrapper, including that the
+  forked workers give the serial result.
+- **`integration`** takes about 15 s on 8 cores. It runs the full integrations, with the default variables and with
+  the Python ones, and compares them with the Python results. OT is compared with a quadrature result. FE_4D and FE_5D
+  must agree with the Python Monte Carlo results within 4 standard deviations of the combined error. For FE_5D the
+  reference is the mean of three Python runs, with the error taken from their scatter.
 
 ### Reference data
 
@@ -95,9 +126,9 @@ each worker re-runs the whole calculation.
 | `src/dipole.hpp` | `BKDipole<Interpolator>` (clamping, clipping, S floor), analytic `GBWDipole` |
 | `src/wavefunctions.hpp` | LO photon wavefunctions squared, OT and FE |
 | `src/quadrupole.hpp` | Gaussian quadrupole from six dipoles, finite and large Nc |
-| `src/integrands.hpp` | OT, FE 4D and FE 5D integrands |
+| `src/integrands.hpp` | OT, FE 4D and FE 5D integrands, the FE 5D correction term of the integration by parts |
 | `src/vegas.*` | Cuba Vegas wrapper |
-| `src/cross_sections.hpp` | structure functions from the integrands |
+| `src/cross_sections.hpp` | structure functions from the integrands; integration variables (`Sampling`) |
 | `src/special_functions.*` | Bessel functions (Boost.Math, or GSL with `-Duse_boost=OFF`) |
 | `src/main.cpp` | command line program |
 

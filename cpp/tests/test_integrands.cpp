@@ -109,10 +109,10 @@ TEST_CASE("OT integrand is symmetric under z -> 1 - z") {
 
 TEST_CASE("Integrand operator() returns L and T of evaluate()") {
     const dis::FE5DIntegrand<Dipole> f(kin, mv_dipole(), false);
-    const double x[5] = {0.7, 1.3, 0.4, 2.0, 50.0};
+    const double x[5] = {0.7, 1.3, 2.0, 0.4, 50.0};  // (u, up, theta, z, Mqq_sq)
     double out[2];
     f(x, out);
-    const auto v = f.evaluate(x[0], x[1], x[2], x[3], x[4]);
+    const auto v = f.evaluate(x[0], x[1], x[3], x[2], x[4]);
     CHECK(out[0] == v.L);
     CHECK(out[1] == v.T);
     CHECK(v.L != 0.0);

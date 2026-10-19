@@ -14,8 +14,8 @@
 #define DIS_VEGAS_HPP
 
 #include <array>
+#include <cmath>
 #include <stdexcept>
-#include <utility>
 #include <vector>
 
 namespace dis {
@@ -45,8 +45,17 @@ struct VegasResult {
     int fail = 0;         // Cuba's fail flag; nonzero is expected with epsrel = 0
 };
 
-// Integration limits, one [lo, hi] interval per dimension.
-using Limits = std::vector<std::pair<double, double>>;
+// One integration variable: the interval [lo, hi] and how Vegas's unit
+// interval t is mapped onto it, linearly (x = lo + (hi - lo) t) or
+// logarithmically (x = lo (hi/lo)^t, for 0 < lo < hi). The Jacobian of the
+// mapping is included automatically.
+struct Axis {
+    enum class Scale { linear, log };
+    double lo, hi;
+    Scale scale = Scale::linear;
+};
+
+using Limits = std::vector<Axis>;
 
 namespace detail {
 
@@ -58,25 +67,35 @@ VegasResult run_vegas(int ndim, int ncomp, CubaIntegrand integrand, void *userda
 template <class Integrand>
 struct Mapped {
     const Integrand *f;
-    std::array<double, Integrand::ndim> lo, width;
-    double jacobian;
+    // Linear axes: x = a + b t. Log axes: x = exp(a + b t).
+    std::array<double, Integrand::ndim> a, b;
+    std::array<bool, Integrand::ndim> log;
+    double jacobian;  // product of b over the linear axes
 };
 
-// Maps Cuba's unit hypercube onto the limits.
+// Maps Cuba's unit hypercube onto the integration variables.
 template <class Integrand>
 int call_mapped(const int * /*ndim*/, const double *unit, const int * /*ncomp*/, double *out,
                 void *userdata) {
     const auto &m = *static_cast<const Mapped<Integrand> *>(userdata);
     double x[Integrand::ndim];
-    for (int i = 0; i < Integrand::ndim; ++i) x[i] = m.lo[i] + m.width[i] * unit[i];
+    double jacobian = m.jacobian;
+    for (int i = 0; i < Integrand::ndim; ++i) {
+        if (m.log[i]) {
+            x[i] = std::exp(m.a[i] + m.b[i] * unit[i]);
+            jacobian *= m.b[i] * x[i];
+        } else {
+            x[i] = m.a[i] + m.b[i] * unit[i];
+        }
+    }
     (*m.f)(x, out);
-    for (int c = 0; c < Integrand::ncomp; ++c) out[c] *= m.jacobian;
+    for (int c = 0; c < Integrand::ncomp; ++c) out[c] *= jacobian;
     return 0;
 }
 
 }  // namespace detail
 
-// Integrates f over the box `limits`. Integrand must provide
+// Integrates f over `limits`. Integrand must provide
 //   static constexpr int ndim, ncomp;
 //   void operator()(const double *x, double *f) const;   // f[0..ncomp-1]
 template <class Integrand>
@@ -88,9 +107,18 @@ VegasResult integrate_vegas(const Integrand &f, const Limits &limits,
     m.f = &f;
     m.jacobian = 1;
     for (int i = 0; i < Integrand::ndim; ++i) {
-        m.lo[i] = limits[i].first;
-        m.width[i] = limits[i].second - limits[i].first;
-        m.jacobian *= m.width[i];
+        const Axis &axis = limits[i];
+        m.log[i] = axis.scale == Axis::Scale::log;
+        if (m.log[i]) {
+            if (!(axis.lo > 0 && axis.hi > axis.lo))
+                throw std::invalid_argument("integrate_vegas: log axis needs 0 < lo < hi");
+            m.a[i] = std::log(axis.lo);
+            m.b[i] = std::log(axis.hi / axis.lo);
+        } else {
+            m.a[i] = axis.lo;
+            m.b[i] = axis.hi - axis.lo;
+            m.jacobian *= m.b[i];
+        }
     }
     return detail::run_vegas(Integrand::ndim, Integrand::ncomp, &detail::call_mapped<Integrand>,
                              &m, settings);

@@ -16,6 +16,12 @@ struct Gaussian4D {
     }
 };
 
+struct InverseX {
+    static constexpr int ndim = 1;
+    static constexpr int ncomp = 1;
+    void operator()(const double *x, double *f) const { f[0] = 1 / x[0]; }
+};
+
 const dis::Limits box = {{-1.0, 2.0}, {-1.0, 2.0}, {-1.0, 2.0}, {-1.0, 2.0}};
 
 dis::VegasSettings small_run(int cores) {
@@ -72,6 +78,19 @@ TEST_CASE("integrate_vegas: the warm-up trains the grid") {
     s.warmup_iterations = 10;
     const auto warm = dis::integrate_vegas(Gaussian4D{}, box, s);
     CHECK(warm.error[0] < cold.error[0]);
+}
+
+TEST_CASE("integrate_vegas: log axes include the jacobian of the mapping") {
+    // 1/x on a log axis is constant in the sampling variable. Vegas does not
+    // integrate even a constant exactly (it refines its grid from noisy
+    // estimates, which makes the weights vary), but the variance is tiny.
+    const dis::Limits log_axis = {{1e-3, 10.0, dis::Axis::Scale::log}};
+    const auto r = dis::integrate_vegas(InverseX{}, log_axis, small_run(0));
+    CHECK(std::abs(r.value[0] - std::log(1e4)) < 5 * r.error[0]);
+    CHECK(r.error[0] < 1e-4 * std::log(1e4));
+
+    const dis::Limits bad = {{0.0, 10.0, dis::Axis::Scale::log}};
+    CHECK_THROWS_AS(dis::integrate_vegas(InverseX{}, bad, small_run(0)), std::invalid_argument);
 }
 
 TEST_CASE("integrate_vegas: rejects inconsistent input") {

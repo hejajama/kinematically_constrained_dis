@@ -29,8 +29,9 @@ struct PairDipoles {
 //   x1' = (1-z) up (cos theta, sin theta), x2' = -z up (cos theta, sin theta).
 // `S` is a dipole at fixed rapidity (anything with double S(double r)).
 template <class DipoleAtY>
-PairDipoles pair_dipoles_polar(const DipoleAtY &S, double u, double up, double z, double theta) {
-    const double c = std::cos(theta), s = std::sin(theta);
+PairDipoles pair_dipoles(const DipoleAtY &S, double u, double up, double z, double cos_theta,
+                         double sin_theta) {
+    const double c = cos_theta, s = sin_theta;
     const double x1[2] = {(1 - z) * u, 0.0};
     const double x2[2] = {-z * u, 0.0};
     const double x1p[2] = {(1 - z) * up * c, (1 - z) * up * s};
@@ -38,6 +39,11 @@ PairDipoles pair_dipoles_polar(const DipoleAtY &S, double u, double up, double z
     auto dist = [](const double *a, const double *b) { return std::hypot(a[0] - b[0], a[1] - b[1]); };
     return {S.S(dist(x1, x2)),  S.S(dist(x2p, x1p)), S.S(dist(x1, x1p)),
             S.S(dist(x2, x2p)), S.S(dist(x1, x2p)),  S.S(dist(x2, x1p))};
+}
+
+template <class DipoleAtY>
+PairDipoles pair_dipoles_polar(const DipoleAtY &S, double u, double up, double z, double theta) {
+    return pair_dipoles(S, u, up, z, std::cos(theta), std::sin(theta));
 }
 
 namespace detail {
@@ -108,11 +114,17 @@ struct Correlators {
 };
 
 template <class DipoleAtY>
-Correlators polar_correlators(const DipoleAtY &S, double u, double up, double z, double theta,
-                              bool largeNc) {
-    const PairDipoles pairs = pair_dipoles_polar(S, u, up, z, theta);
+Correlators correlators(const DipoleAtY &S, double u, double up, double z, double cos_theta,
+                        double sin_theta, bool largeNc) {
+    const PairDipoles pairs = pair_dipoles(S, u, up, z, cos_theta, sin_theta);
     const double S4 = largeNc ? quadrupole_large_Nc(pairs) : quadrupole_finite_Nc(pairs);
     return {pairs.d12, pairs.d1p2p, S4};
+}
+
+template <class DipoleAtY>
+Correlators polar_correlators(const DipoleAtY &S, double u, double up, double z, double theta,
+                              bool largeNc) {
+    return correlators(S, u, up, z, std::cos(theta), std::sin(theta), largeNc);
 }
 
 }  // namespace dis

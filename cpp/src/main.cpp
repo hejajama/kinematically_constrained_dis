@@ -28,6 +28,7 @@ struct Options {
     std::string interpolation = dis::BicubicSpline::name;
     std::set<std::string> only;  // empty: all
     dis::VegasSettings vegas;
+    dis::Sampling sampling;
 };
 
 void usage(const char *prog) {
@@ -53,7 +54,17 @@ void usage(const char *prog) {
         << "  --nbatch N       Vegas batch size (10000)\n"
         << "  --iterations N   main-run iterations (20)\n"
         << "  --warmup N       warm-up iterations with mcpoints/10 points (10)\n"
-        << "  --verbose V      Cuba verbosity 0-3 (0)\n";
+        << "  --verbose V      Cuba verbosity 0-3 (0)\n"
+        << "\n"
+        << "Sampling (see cross_sections.hpp; all compute the same integral):\n"
+        << "  --variables python|optimized   python: the variables of the Python code;\n"
+        << "                   optimized (default): the settings below\n"
+        << "  --linear-sizes   dipole sizes on a linear scale (default: log)\n"
+        << "  --polar          FE in (u, u', theta) (default: (u, |u-u'|, phi))\n"
+        << "  --linear-relative   |u-u'| on a linear scale (default: log)\n"
+        << "  --log-Mqq        FE 5D: M_qq^2 on a log scale (default: linear)\n"
+        << "  --no-by-parts    FE 5D: integrate the original form, not by parts in M_qq^2\n"
+        << "  --no-symmetries  do not use z <-> 1-z and angle <-> -angle\n";
 }
 
 Options parse(int argc, char **argv) {
@@ -82,6 +93,18 @@ Options parse(int argc, char **argv) {
         else if (arg == "--iterations") o.vegas.iterations = std::stoi(value());
         else if (arg == "--warmup") o.vegas.warmup_iterations = std::stoi(value());
         else if (arg == "--verbose") o.vegas.verbose = std::stoi(value());
+        else if (arg == "--variables") {
+            const std::string v = value();
+            if (v == "python") o.sampling = dis::Sampling::python();
+            else if (v == "optimized") o.sampling = dis::Sampling{};
+            else throw std::invalid_argument("--variables must be python or optimized");
+        }
+        else if (arg == "--linear-sizes") o.sampling.log_sizes = false;
+        else if (arg == "--polar") o.sampling.relative_coordinates = false;
+        else if (arg == "--linear-relative") o.sampling.log_relative = false;
+        else if (arg == "--log-Mqq") o.sampling.log_Mqq = true;
+        else if (arg == "--no-by-parts") o.sampling.fe5d_by_parts = false;
+        else if (arg == "--no-symmetries") o.sampling.symmetries = false;
         else if (arg == "-h" || arg == "--help") {
             usage(argv[0]);
             std::exit(0);
@@ -117,11 +140,13 @@ void run(const Options &o) {
                      sf.FL_chi2_prob, sf.FT_chi2_prob);
     };
 
-    run_one("OT", [&] { return dis::ot_structure_functions(o.kin, dipole, o.vegas); });
-    run_one("FE_4D",
-            [&] { return dis::fe4d_structure_functions(o.kin, dipole, o.largeNc, o.vegas); });
-    run_one("FE_5D",
-            [&] { return dis::fe5d_structure_functions(o.kin, dipole, o.largeNc, o.vegas); });
+    run_one("OT", [&] { return dis::ot_structure_functions(o.kin, dipole, o.vegas, o.sampling); });
+    run_one("FE_4D", [&] {
+        return dis::fe4d_structure_functions(o.kin, dipole, o.largeNc, o.vegas, o.sampling);
+    });
+    run_one("FE_5D", [&] {
+        return dis::fe5d_structure_functions(o.kin, dipole, o.largeNc, o.vegas, o.sampling);
+    });
 }
 
 }  // namespace

@@ -16,6 +16,7 @@ set(TEST_SOURCES
     test_quadrupole.cpp
     test_integrands.cpp
     test_vegas.cpp
+    test_sampling.cpp
     test_cross_sections.cpp
     )
 

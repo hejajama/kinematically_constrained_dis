@@ -6,6 +6,7 @@
 // (difference over the combined error), except for OT, which has a
 // deterministic quadrature reference.
 
+#include <algorithm>
 #include <cmath>
 #include <string>
 
@@ -60,9 +61,32 @@ void check_against_python(const std::string &file, const std::string &calc,
     check_pull(calc + " FT", sf.FT, sf.FT_err, ref(i, "FT"), ref(i, "FT_err"));
 }
 
+// FE_5D from three Python runs at 1e7 points with different seeds. Their
+// scatter is about twice the error vegas reports for one run (its integrand
+// in these variables has infinite variance), so the error of the mean is
+// taken as the larger of the two estimates.
+void check_against_python_fe5d(const dis::StructureFunctions &sf) {
+    const ReferenceTable runs[] = {ReferenceTable("integrated_xB1e-3_mc1e7_8cores.txt"),
+                                   ReferenceTable("integrated_xB1e-3_mc1e7_FE5D_seed5.txt"),
+                                   ReferenceTable("integrated_xB1e-3_mc1e7_FE5D_seed6.txt")};
+    for (const std::string F : {"FL", "FT"}) {
+        double mean = 0, reported = 0, scatter = 0;
+        for (const auto &r : runs) {
+            mean += r(row_of(r, "FE_5D"), F) / 3;
+            reported += r(row_of(r, "FE_5D"), F + "_err") / 3;
+        }
+        for (const auto &r : runs) scatter += std::pow(r(row_of(r, "FE_5D"), F) - mean, 2) / 2;
+        const double err = std::max(reported, std::sqrt(scatter)) / std::sqrt(3.0);
+        check_pull("FE_5D " + F, F == "FL" ? sf.FL : sf.FT, F == "FL" ? sf.FL_err : sf.FT_err,
+                   mean, err);
+    }
+}
+
 }  // namespace
 
 TEST_SUITE("integration") {
+    // Default sampling (see dis::Sampling).
+
     TEST_CASE("OT structure functions match the quadrature reference") {
         const auto sf = dis::ot_structure_functions(kin, mv_dipole(), settings(1000000));
         const ReferenceTable ref("integrated_OT_quadrature.txt");
@@ -77,11 +101,15 @@ TEST_SUITE("integration") {
     TEST_CASE("FE 4D structure functions match Python, finite Nc") {
         const auto sf = dis::fe4d_structure_functions(kin, mv_dipole(), false, settings(1000000));
         check_against_python("integrated_xB1e-3_mc1e7_8cores.txt", "FE_4D", sf);
+        CHECK(sf.FL_err < 3e-3 * sf.FL);
     }
 
     TEST_CASE("FE 5D structure functions match Python, finite Nc") {
         const auto sf = dis::fe5d_structure_functions(kin, mv_dipole(), false, settings(1000000));
-        check_against_python("integrated_xB1e-3_mc1e7_8cores.txt", "FE_5D", sf);
+        check_against_python_fe5d(sf);
+        // Integrated by parts, the error is far below that of the original form.
+        CHECK(sf.FL_err < 3e-3 * sf.FL);
+        CHECK(sf.FT_err < 3e-3 * sf.FT);
     }
 
     TEST_CASE("FE 4D and 5D structure functions match Python, large Nc") {
@@ -90,5 +118,16 @@ TEST_SUITE("integration") {
                              dis::fe4d_structure_functions(kin, mv_dipole(), true, settings(1000000)));
         check_against_python(file, "FE_5D",
                              dis::fe5d_structure_functions(kin, mv_dipole(), true, settings(1000000)));
+    }
+
+    // The variables of the Python code.
+
+    TEST_CASE("Python variables: FE 4D and 5D structure functions match Python") {
+        const auto python = dis::Sampling::python();
+        check_against_python(
+            "integrated_xB1e-3_mc1e7_8cores.txt", "FE_4D",
+            dis::fe4d_structure_functions(kin, mv_dipole(), false, settings(1000000), python));
+        check_against_python_fe5d(
+            dis::fe5d_structure_functions(kin, mv_dipole(), false, settings(1000000), python));
     }
 }

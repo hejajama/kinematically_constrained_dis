@@ -54,9 +54,9 @@ inline LT ot_wavefunctions_squared(const PhotonParameters &p, double r, double z
 }
 
 // FE wavefunction times conjugate, with dipole sizes u (amplitude) and up
-// (conjugate amplitude) at relative angle theta.
-inline LT fe_wavefunctions_squared(const PhotonParameters &p, double u, double up, double z,
-                                   double theta) {
+// (conjugate amplitude) at relative angle theta, given through cos(theta).
+inline LT fe_wavefunctions_squared_cos(const PhotonParameters &p, double u, double up, double z,
+                                       double cos_theta) {
     const double Cf_T = 2 * Nc * alpha_em * p.Zf * p.Zf / pi;
     const double Cf_L = 8 * Nc * alpha_em * p.Zf * p.Zf / pi;
     const double eps2 = detail::epsilon_sq(p, z);
@@ -64,11 +64,16 @@ inline LT fe_wavefunctions_squared(const PhotonParameters &p, double u, double u
     const double K0_sq = bessel_K0(u * sqrt_eps) * bessel_K0(up * sqrt_eps);
     const double K1_sq = bessel_K1(u * sqrt_eps) * bessel_K1(up * sqrt_eps);
 
-    const double term1 = (z * z + (1 - z) * (1 - z)) * eps2 * std::cos(theta) * K1_sq;
+    const double term1 = (z * z + (1 - z) * (1 - z)) * eps2 * cos_theta * K1_sq;
     const double term2 = p.mf * p.mf * K0_sq;
     const double zbar = 1 - z;
     return {Cf_L * p.Q * p.Q * (z * z * z) * (zbar * zbar * zbar) * K0_sq,
             Cf_T * z * zbar * (term1 + term2)};
+}
+
+inline LT fe_wavefunctions_squared(const PhotonParameters &p, double u, double up, double z,
+                                   double theta) {
+    return fe_wavefunctions_squared_cos(p, u, up, z, std::cos(theta));
 }
 
 }  // namespace dis

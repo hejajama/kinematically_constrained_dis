@@ -7,7 +7,13 @@
 //   double AtRapidity::S(double r) const;     // S(r) at that rapidity
 //
 // at() is called once per integrand evaluation and S() for each of the
-// dipoles at that point, so per-rapidity work belongs in at().
+// dipoles at that point, so per-rapidity work belongs in at(). It must also
+// provide
+//
+//   double Y_min() const, Y_max() const;
+//
+// the range in which S depends on Y; outside it S is constant in Y. The FE
+// 5D cross section uses this to restrict the M_qq^2 range where dS/dY != 0.
 //
 // BKDipole wraps a tabulated rcbk solution and an interpolator (see
 // interpolation.hpp for how to add one). GBWDipole is an analytic model used
@@ -75,6 +81,10 @@ public:
     double N(double r, double Y) const { return at(Y).N(r); }
     double S(double r, double Y) const { return at(Y).S(r); }
 
+    // Outside the tabulated rapidities Y is clamped, so S does not change.
+    double Y_min() const { return table_.Y_min(); }
+    double Y_max() const { return table_.Y_max(); }
+
     const RcbkTable &table() const { return table_; }
     const Interpolator &interpolator() const { return interp_; }
 
@@ -103,6 +113,9 @@ public:
         a.Qs2_ = Qs2_;
         return a;
     }
+
+    double Y_min() const { return -INFINITY; }
+    double Y_max() const { return INFINITY; }
 
 private:
     double Qs2_;
