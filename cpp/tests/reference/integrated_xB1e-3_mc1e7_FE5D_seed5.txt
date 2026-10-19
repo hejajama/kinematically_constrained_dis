@@ -1,0 +1,4 @@
+# Python vegas results, src/small_x_physics (run_python_reference.py)
+# seed = 5
+# calc Q2 xB mf largeNc mcpoints n_cores seconds FL FL_err FT FT_err
+FE_5D 2.0000000000000004 0.001 0.14 0.0 10000000.0 8.0 88.22670037500211 0.07687708053229762 0.0005076115268874735 0.27483436751493207 0.0009401680412160137
