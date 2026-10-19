@@ -14,6 +14,7 @@ endif()
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 
 option(unittest "Build unit tests" OFF)
+option(use_boost "Bessel functions from Boost.Math (faster) instead of GSL" ON)
 option(native "Optimize for the CPU of the build machine (-march=native / -mcpu=native)" ON)
 
 # No -ffast-math: the quadrupole relies on IEEE NaN semantics (sqrt of a
@@ -30,7 +31,14 @@ if (native)
     endif()
 endif()
 
-find_package(GSL REQUIRED)
+if (use_boost)
+    # Header-only; Boost.Math needs no compiled Boost library.
+    find_package(Boost 1.70 CONFIG REQUIRED)
+    message(STATUS "Bessel functions: Boost ${Boost_VERSION}")
+else()
+    find_package(GSL REQUIRED)
+    message(STATUS "Bessel functions: GSL")
+endif()
 
 add_subdirectory(external/cuba-4.2.2)
 add_subdirectory(src)

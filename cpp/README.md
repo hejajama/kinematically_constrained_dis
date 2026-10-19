@@ -13,7 +13,9 @@ It takes the same command line options as that script and prints the same CSV ta
 
 ## Build
 
-Needs CMake ≥ 3.16, a C++17 compiler and GSL.
+Needs CMake ≥ 3.16, a C++17 compiler and Boost (header-only Boost.Math, for the Bessel functions). Without Boost,
+build with `-Duse_boost=OFF` to take the Bessel functions from GSL instead; they are 3–4× slower, which makes the FE
+integrands about 1.8× slower.
 
 ```sh
 cmake -S cpp -B cpp/build -Dunittest=ON
@@ -96,7 +98,7 @@ each worker re-runs the whole calculation.
 | `src/integrands.hpp` | OT, FE 4D and FE 5D integrands |
 | `src/vegas.*` | Cuba Vegas wrapper |
 | `src/cross_sections.hpp` | structure functions from the integrands |
-| `src/special_functions.*` | Bessel functions (GSL) |
+| `src/special_functions.*` | Bessel functions (Boost.Math, or GSL with `-Duse_boost=OFF`) |
 | `src/main.cpp` | command line program |
 
 ### Changing the dipole interpolation
