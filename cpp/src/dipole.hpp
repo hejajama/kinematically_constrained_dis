@@ -11,13 +11,18 @@
 // provide
 //
 //   double Y_min() const, Y_max() const;
+//   std::vector<double> Y_breakpoints() const;
 //
-// the range in which S depends on Y; outside it S is constant in Y. The FE
-// 5D cross section uses this to restrict the M_qq^2 range where dS/dY != 0.
+// [Y_min, Y_max] is the range in which S depends on Y; outside it S is
+// constant in Y. Between consecutive breakpoints S is a smooth function of Y;
+// at a breakpoint its Y derivative may jump (e.g. where a tabulated solution
+// is clamped). The FE 5D cross section uses these to restrict the M_qq^2
+// range where dS/dY != 0 and to place its interpolation nodes.
 //
 // BKDipole wraps a tabulated rcbk solution and an interpolator (see
-// interpolation.hpp for how to add one). GBWDipole is an analytic model used
-// to test the quadrupole independently of any interpolation.
+// interpolation.hpp for how to add one). LargeXExtrapolation extends a dipole
+// to x > x0. GBWDipole is an analytic model used to test the quadrupole
+// independently of any interpolation.
 
 #ifndef DIS_DIPOLE_HPP
 #define DIS_DIPOLE_HPP
@@ -26,6 +31,7 @@
 #include <cmath>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "interpolation.hpp"
 #include "rcbk_table.hpp"
@@ -84,6 +90,7 @@ public:
     // Outside the tabulated rapidities Y is clamped, so S does not change.
     double Y_min() const { return table_.Y_min(); }
     double Y_max() const { return table_.Y_max(); }
+    std::vector<double> Y_breakpoints() const { return {Y_min(), Y_max()}; }
 
     const RcbkTable &table() const { return table_; }
     const Interpolator &interpolator() const { return interp_; }
@@ -116,9 +123,69 @@ public:
 
     double Y_min() const { return -INFINITY; }
     double Y_max() const { return INFINITY; }
+    std::vector<double> Y_breakpoints() const { return {}; }
 
 private:
     double Qs2_;
+};
+
+// Extends a dipole to x > x0, i.e. to Y = ln(x0 / x) < 0, as
+//
+//   N(r, x) = N(r, x0) (1 - x)^power,
+//
+// so that the target becomes transparent (N = 0, S = 1) at x = 1. For Y >= 0
+// it is the base dipole unchanged. The base dipole's AtRapidity must provide
+// N(r) as well as S(r) (BKDipole does). x0 must be the x0 that defines Y in
+// the cross sections (Kinematics::x0).
+template <class Base>
+class LargeXExtrapolation {
+public:
+    LargeXExtrapolation(const Base &base, double x0, double power, double S_floor = 1e-14)
+        : base_(base), x0_(x0), power_(power), S_floor_(S_floor) {}
+
+    class AtRapidity {
+    public:
+        double N(double r) const { return factor_ * at_.N(r); }
+        double S(double r) const {
+            return factor_ == 1 ? at_.S(r) : std::max(1.0 - N(r), S_floor_);
+        }
+
+    private:
+        friend class LargeXExtrapolation;
+        typename Base::AtRapidity at_;
+        double factor_ = 1, S_floor_ = 0;
+    };
+
+    AtRapidity at(double Y) const {
+        AtRapidity a;
+        a.S_floor_ = S_floor_;
+        if (Y >= 0) {
+            a.at_ = base_.at(Y);
+            return a;
+        }
+        const double x = x0_ * std::exp(-Y);
+        a.at_ = base_.at(0.0);
+        a.factor_ = x < 1 ? std::pow(1 - x, power_) : 0.0;
+        return a;
+    }
+
+    // S depends on Y down to x = 1; beyond, N = 0.
+    double Y_min() const { return std::log(x0_); }
+    double Y_max() const { return base_.Y_max(); }
+    // Y = 0 joins the extrapolation to the base dipole (dS/dY jumps there).
+    std::vector<double> Y_breakpoints() const {
+        std::vector<double> b = {Y_min(), 0.0};
+        for (double Y : base_.Y_breakpoints())
+            if (Y > 0) b.push_back(Y);
+        return b;
+    }
+
+    double x0() const { return x0_; }
+    double power() const { return power_; }
+
+private:
+    const Base &base_;
+    double x0_, power_, S_floor_;
 };
 
 }  // namespace dis

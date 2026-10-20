@@ -17,6 +17,7 @@ set(TEST_SOURCES
     test_integrands.cpp
     test_integration.cpp
     test_sampling.cpp
+    test_filon.cpp
     test_cross_sections.cpp
     )
 

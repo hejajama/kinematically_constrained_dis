@@ -128,6 +128,50 @@ TEST_SUITE("integration") {
         CHECK(fine.FL_err < 0.2 * coarse.FL_err);
     }
 
+    TEST_CASE("Cuhre: FE 5D by Filon agrees with by parts for the frozen dipole") {
+        dis::Sampling filon, by_parts;
+        filon.fe5d_method = dis::Sampling::FE5DMethod::filon;
+        by_parts.fe5d_method = dis::Sampling::FE5DMethod::by_parts;
+        const auto a = dis::fe5d_structure_functions(kin, mv_dipole(), false, cuhre(1e-3), filon);
+        const auto b = dis::fe5d_structure_functions(kin, mv_dipole(), false, cuhre(1e-4), by_parts);
+        check_pull("FE_5D FL filon vs by parts", a.FL, a.FL_err, b.FL, b.FL_err);
+        check_pull("FE_5D FT filon vs by parts", a.FT, a.FT_err, b.FT, b.FT_err);
+        // Automatic: a frozen dipole uses by parts.
+        const auto c = dis::fe5d_structure_functions(kin, mv_dipole(), false, cuhre(1e-4));
+        CHECK(c.FL == b.FL);
+    }
+
+    // The dipole extrapolated to x > x0. There is no Python reference, so the
+    // methods are compared with each other: Cuhre with the Filon rule (the
+    // automatic choice), Vegas integrating by parts, and Vegas on the
+    // original form in the Python variables (the Python code's method).
+
+    TEST_CASE("Extrapolated dipole: FE 5D methods agree") {
+        const dis::LargeXExtrapolation<Dipole> ext(mv_dipole(), kin.x0, 4.0);
+        const auto filon = dis::fe5d_structure_functions(kin, ext, false, cuhre(1e-4));
+        CHECK(filon.fail == 0);
+
+        dis::Sampling by_parts;
+        by_parts.fe5d_method = dis::Sampling::FE5DMethod::by_parts;
+        const auto vegas_by_parts =
+            dis::fe5d_structure_functions(kin, ext, false, vegas(1000000), by_parts);
+        check_pull("FL by parts (Vegas) vs filon (Cuhre)", vegas_by_parts.FL, vegas_by_parts.FL_err,
+                   filon.FL, filon.FL_err);
+        check_pull("FT by parts (Vegas) vs filon (Cuhre)", vegas_by_parts.FT, vegas_by_parts.FT_err,
+                   filon.FT, filon.FT_err);
+
+        const auto original =
+            dis::fe5d_structure_functions(kin, ext, false, vegas(1000000), dis::Sampling::python());
+        check_pull("FL original (Vegas) vs filon (Cuhre)", original.FL, original.FL_err, filon.FL,
+                   filon.FL_err);
+        check_pull("FT original (Vegas) vs filon (Cuhre)", original.FT, original.FT_err, filon.FT,
+                   filon.FT_err);
+
+        // The extrapolation lowers FE_5D: the target vanishes as xP -> 1.
+        const auto frozen = dis::fe5d_structure_functions(kin, mv_dipole(), false, cuhre(1e-3));
+        CHECK(filon.FT < frozen.FT - 10 * frozen.FT_err);
+    }
+
     // Vegas with the default sampling.
 
     TEST_CASE("Vegas: OT structure functions match the quadrature reference") {

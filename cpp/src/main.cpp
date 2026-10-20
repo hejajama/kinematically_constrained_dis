@@ -25,6 +25,7 @@ struct Options {
     dis::Kinematics kin{std::sqrt(2.0), 1e-2, 0.14, std::sqrt(2.0 / 3.0), 2 * 2.57 * 18.81, 0.01};
     std::string bkfile;
     bool largeNc = false;
+    double large_x_power = 0;  // > 0: extrapolate the dipole to x > x0
     std::string interpolation = dis::BicubicSpline::name;
     std::set<std::string> only;  // empty: all
     dis::IntegrationSettings integration;
@@ -43,6 +44,8 @@ void usage(const char *prog) {
         << "  --sigma0 S       GeV^-2 (2*2.57*18.81)\n"
         << "  --x0 X           initial x of the BK evolution (0.01)\n"
         << "  --largeNc        large-Nc quadrupole (FE rows only)\n"
+        << "  --large-x-power P   for x > x0 use N(r, x) = N(r, x0) (1 - x)^P (default: the\n"
+        << "                   dipole stays at x0); affects FE_5D only\n"
         << "  --Qs0, --gamma, --ec   accepted for compatibility, unused (taken from the BK file)\n"
         << "\n"
         << "Numerics:\n"
@@ -70,7 +73,9 @@ void usage(const char *prog) {
         << "  --polar          FE in (u, u', theta) (default: (u, |u-u'|, phi))\n"
         << "  --linear-relative   |u-u'| on a linear scale (default: log)\n"
         << "  --log-Mqq        FE 5D: M_qq^2 on a log scale (default: linear)\n"
-        << "  --no-by-parts    FE 5D: integrate the original form, not by parts in M_qq^2\n"
+        << "  --fe5d-method M  FE 5D M_qq^2 integral: auto (default), by-parts, filon or original;\n"
+        << "                   auto = by-parts for a dipole frozen above x0, filon otherwise\n"
+        << "  --filon-nodes N, --filon-panels N   resolution of the filon method (8, 8)\n"
         << "  --no-symmetries  do not use z <-> 1-z and angle <-> -angle\n";
 }
 
@@ -91,6 +96,7 @@ Options parse(int argc, char **argv) {
         else if (arg == "--Qs0" || arg == "--gamma" || arg == "--ec") value();
         else if (arg == "--bkfile") o.bkfile = value();
         else if (arg == "--largeNc") o.largeNc = true;
+        else if (arg == "--large-x-power") o.large_x_power = std::stod(value());
         else if (arg == "--integrator")
             o.integration.integrator = dis::integrator_from_name(value());
         else if (arg == "--epsrel") o.integration.cuhre.epsrel = std::stod(value());
@@ -116,7 +122,17 @@ Options parse(int argc, char **argv) {
         else if (arg == "--polar") o.sampling.relative_coordinates = false;
         else if (arg == "--linear-relative") o.sampling.log_relative = false;
         else if (arg == "--log-Mqq") o.sampling.log_Mqq = true;
-        else if (arg == "--no-by-parts") o.sampling.fe5d_by_parts = false;
+        else if (arg == "--fe5d-method") {
+            const std::string m = value();
+            using Method = dis::Sampling::FE5DMethod;
+            if (m == "auto") o.sampling.fe5d_method = Method::automatic;
+            else if (m == "filon") o.sampling.fe5d_method = Method::filon;
+            else if (m == "by-parts") o.sampling.fe5d_method = Method::by_parts;
+            else if (m == "original") o.sampling.fe5d_method = Method::original;
+            else throw std::invalid_argument("--fe5d-method must be auto, filon, by-parts or original");
+        }
+        else if (arg == "--filon-nodes") o.sampling.filon_nodes = std::stoi(value());
+        else if (arg == "--filon-panels") o.sampling.filon_panels = std::stoi(value());
         else if (arg == "--no-symmetries") o.sampling.symmetries = false;
         else if (arg == "-h" || arg == "--help") {
             usage(argv[0]);
@@ -130,15 +146,8 @@ Options parse(int argc, char **argv) {
     return o;
 }
 
-template <class Interpolator>
-void run(const Options &o) {
-    const dis::BKDipole<Interpolator> dipole(o.bkfile);
-    const auto &table = dipole.table();
-    const double Y_fixed = std::log(o.kin.x0 / o.kin.xB);
-    if (Y_fixed < table.Y_min() || Y_fixed > table.Y_max())
-        std::cerr << "Warning: Y = log(x0/xB) = " << Y_fixed << " is outside the tabulated range ["
-                  << table.Y_min() << ", " << table.Y_max() << "] of " << o.bkfile << "\n";
-
+template <class Dipole>
+void run_with(const Options &o, const Dipole &dipole) {
     // Same columns as test_bk_integration.py. With Cuhre, which has no
     // mcpoints, that column holds the number of integrand evaluations.
     const bool vegas = o.integration.integrator == dis::Integrator::vegas;
@@ -172,6 +181,28 @@ void run(const Options &o) {
     run_one("FE_5D", [&] {
         return dis::fe5d_structure_functions(o.kin, dipole, o.largeNc, o.integration, o.sampling);
     });
+}
+
+template <class Interpolator>
+void run(const Options &o) {
+    if (o.large_x_power > 0 &&
+        o.sampling.fe5d_method == dis::Sampling::FE5DMethod::by_parts &&
+        o.integration.integrator == dis::Integrator::cuhre &&
+        (o.only.empty() || o.only.count("FE_5D")))
+        std::cerr << "Warning: with --large-x-power the dipole depends on x up to xP = 1, and "
+                     "Cuhre's error estimate is not reliable for the by-parts FE_5D integral; use "
+                     "--fe5d-method filon (or auto), or --integrator vegas.\n";
+    const dis::BKDipole<Interpolator> dipole(o.bkfile);
+    const auto &table = dipole.table();
+    const double Y_fixed = std::log(o.kin.x0 / o.kin.xB);
+    if (Y_fixed < table.Y_min() || Y_fixed > table.Y_max())
+        std::cerr << "Warning: Y = log(x0/xB) = " << Y_fixed << " is outside the tabulated range ["
+                  << table.Y_min() << ", " << table.Y_max() << "] of " << o.bkfile << "\n";
+    if (o.large_x_power > 0)
+        run_with(o, dis::LargeXExtrapolation<dis::BKDipole<Interpolator>>(dipole, o.kin.x0,
+                                                                          o.large_x_power));
+    else
+        run_with(o, dipole);
 }
 
 }  // namespace

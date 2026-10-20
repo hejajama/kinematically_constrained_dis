@@ -37,6 +37,10 @@ cpp/build/bin/dis_xs --bkfile data/mv.dat --xB 1e-3 --mcpoints 100000
 - `--mcpoints N`, `--seed S`, `--nbatch`, `--iterations`, `--warmup`: Vegas settings; seed `0` selects Sobol
   quasi-random numbers;
 - `--interpolation bicubic|bilinear`: the dipole interpolation;
+- `--large-x-power P`: for x > x0, use N(r, x) = N(r, x0)(1 − x)^P instead of keeping the dipole at x0 (affects
+  FE_5D only, the only quantity that evaluates the dipole at xP > x0);
+- `--fe5d-method auto|by-parts|filon|original`, `--filon-nodes N`, `--filon-panels N`: how FE_5D's M² integral is
+  done (see below);
 - `--only OT|FE_4D|FE_5D`: compute only these rows; can be repeated;
 - `--cores N`: number of worker processes; `0` means none;
 - `--verbose V`: Cuba's verbosity, 0–3;
@@ -85,12 +89,25 @@ off, and single options can be switched off one at a time (see `--help`).
   integration box, where Vegas cannot adapt to it. There the integrand's variance is infinite: estimates drift with
   the number of points, and the reported errors are too small. The C++ code integrates over u, r = |u⃗ − u⃗′| (log
   scale) and the angle of u⃗ − u⃗′ instead.
-- **FE_5D integrated by parts in M²_qq.** In the original form, J0 oscillates over the whole M² range up to W², and the
-  M² integral builds the peak above only by cancellation. Integrating by parts gives the FE_4D integrand with the
-  dipole at xP = 1, plus a correction proportional to dT/dY (T the target amplitude). The correction vanishes
-  wherever the dipole does not depend on Y: for a BK solution that is xP > x0, most of the M² range. The derivation is
-  in the comment of `FE5DCorrectionIntegrand` in `src/integrands.hpp`. The correction gets a tenth of the points, since
-  its variance is much smaller.
+- **FE_5D's M² integral.** In the original form, J0 oscillates over the whole M² range up to W², and the M² integral
+  builds the peak above only by cancellation. Two exact rewrites avoid this; `--fe5d-method auto`, the default, picks
+  between them:
+  - **By parts** (`by-parts`). Integrating by parts gives the FE_4D integrand with the dipole at xP = 1, plus a
+    correction proportional to dT/dY (T the target amplitude). The correction vanishes wherever the dipole does not
+    depend on Y: for a BK solution kept at its initial condition above x0, that is xP > x0, most of the M² range. The
+    derivation is in the comment of `FE5DCorrectionIntegrand` in `src/integrands.hpp` and in
+    `doc/fe5d_by_parts.pdf`. With Vegas, the correction gets a tenth of the points, since its variance is much
+    smaller. `auto` uses this when the dipole is frozen somewhere inside the M² range.
+  - **Filon** (`filon`). At each (u, u′, θ, z), T is evaluated at a few Chebyshev nodes (8 by default; in Y below x0,
+    in xP above it) and interpolated, and J0 is integrated against the interpolant exactly with a cubic Filon rule
+    (`FE5DFilonIntegrand`, `src/filon.*`). That leaves a smooth 4D integral. Each point costs about 30× an FE_4D
+    point. `auto` uses this when the dipole depends on Y all the way to xP = 1, as with `--large-x-power`.
+
+    In that case the by-parts correction spans the whole M² range again. Cuhre then fails on it, with results 20×
+    its error estimate off at xB = 1e-3, and the program warns. With Filon, the integrand vanishes smoothly at
+    xP = 1, and Cuhre converges in about 10⁵ evaluations: 1 s at `epsrel` 1e-3 and 4 s at 1e-4 on one core. The
+    default 8 nodes and 8 panels change the result by much less than the error at `epsrel` 1e-4; for smaller `epsrel`,
+    raise them.
 - **Symmetries.** z ↔ 1−z and angle ↔ −angle are exact symmetries, so z runs over [z_min, ½] and the angle over
   [0, π].
 - **Dipole sizes on a log scale.**
@@ -122,13 +139,16 @@ ctest runs two entries:
 
   It also tests exact properties: the spline reproduces polynomials and grid nodes, and the quadrupole has the right
   limits. It checks what the integration variables rely on: the symmetries, the relative coordinates, and the FE_5D
-  integration by parts, against a 1D quadrature over M²_qq. Finally it checks the Cuhre and Vegas wrappers, including
-  that the forked workers give the serial result.
-- **`integration`** takes about 35 s on 8 cores. It runs the full integrations with Cuhre and with Vegas, with the
+  integration by parts and Filon rule, both against a 1D quadrature over M²_qq, with the frozen and the extrapolated
+  dipole. It also checks the Filon moments and weights, the large-x extrapolation, and the Cuhre and Vegas wrappers,
+  including that the forked workers give the serial result.
+- **`integration`** takes about a minute on 8 cores. It runs the full integrations with Cuhre and with Vegas, with the
   default variables and with the Python ones, and compares them with the Python results. For Cuhre it also checks that
   the error estimate covers the change to a 10× smaller `epsrel`. OT is compared with a quadrature result. FE_4D and FE_5D
   must agree with the Python Monte Carlo results within 4 standard deviations of the combined error. For FE_5D the
-  reference is the mean of three Python runs, with the error taken from their scatter.
+  reference is the mean of three Python runs, with the error taken from their scatter. For the extrapolated dipole,
+  which the Python code does not have, three independent FE_5D methods are compared with each other: Filon with
+  Cuhre, by parts with Vegas, and the original form in the Python variables with Vegas.
 
 ### Reference data
 
@@ -154,10 +174,11 @@ each worker re-runs the whole calculation.
 |---|---|
 | `src/rcbk_table.*` | reads an rcbk solver output file: grids, N(r, Y), header |
 | `src/interpolation.*` | interpolators of N(r, Y): `BicubicSpline` (as scipy's `RectBivariateSpline`), `Bilinear` |
-| `src/dipole.hpp` | `BKDipole<Interpolator>` (clamping, clipping, S floor), analytic `GBWDipole` |
+| `src/dipole.hpp` | `BKDipole<Interpolator>` (clamping, clipping, S floor), `LargeXExtrapolation`, analytic `GBWDipole` |
 | `src/wavefunctions.hpp` | LO photon wavefunctions squared, OT and FE |
 | `src/quadrupole.hpp` | Gaussian quadrupole from six dipoles, finite and large Nc |
-| `src/integrands.hpp` | OT, FE 4D and FE 5D integrands, the FE 5D correction term of the integration by parts |
+| `src/integrands.hpp` | OT, FE 4D and FE 5D integrands; the FE 5D correction term of the integration by parts and the Filon form |
+| `src/filon.*` | Filon rule for ∫ J0(r√s) T(s) ds |
 | `src/integration.*` | Cuba Cuhre and Vegas wrappers, axis mappings |
 | `src/cross_sections.hpp` | structure functions from the integrands; integration variables (`Sampling`) |
 | `src/special_functions.*` | Bessel functions (Boost.Math, or GSL with `-Duse_boost=OFF`) |

@@ -44,15 +44,26 @@ struct Sampling {
     double r_relative_min = 1e-10;
     // FE 5D: M_qq^2 on a logarithmic scale.
     bool log_Mqq = false;
-    // FE 5D: integrate by parts in M_qq^2 (see FE5DCorrectionIntegrand): a 4D
-    // boundary term plus a 5D correction where the dipole depends on M_qq^2.
-    // The same integral, with a far smaller Monte Carlo error.
-    bool fe5d_by_parts = true;
-    // Vegas: points of the correction relative to the boundary term. The
-    // correction is the smaller part with a much smaller variance (at
-    // xB = 1e-3, 10-20% of the result with a 20-35x smaller error at equal
-    // points), so a tenth of the points changes the total error by ~1%.
-    // (Cuhre integrates both parts to the same relative accuracy.)
+    // How the FE 5D M_qq^2 integral is done; all give the same integral.
+    //  original: as the Python code, a 5D integral with the J0 kernel.
+    //  by_parts: integrated by parts in M_qq^2 (FE5DCorrectionIntegrand): a 4D
+    //    boundary term plus a 5D correction where the dipole depends on M_qq^2.
+    //    Fast and accurate when the dipole is frozen above some x (correction at
+    //    small M_qq^2 only). When it depends on x all the way to xP = 1 the
+    //    correction oscillates over the whole range, and Cuhre's error estimate
+    //    fails on it (results off by ~20 times the estimate at xB = 1e-3).
+    //  filon: the M_qq^2 integral at each point by a Filon rule
+    //    (FE5DFilonIntegrand), leaving a smooth 4D integral. Works in both
+    //    cases; ~30x more expensive per point than FE 4D, but when the dipole
+    //    vanishes smoothly at xP = 1 the result is smooth enough for Cuhre to
+    //    converge in ~1e5 evaluations.
+    //  automatic: by_parts if the dipole stops depending on Y (is frozen)
+    //    inside the M_qq^2 range, filon otherwise.
+    enum class FE5DMethod { automatic, original, by_parts, filon };
+    FE5DMethod fe5d_method = FE5DMethod::automatic;
+    // Filon: Chebyshev nodes in Y and panels per smooth piece of the M_qq^2 range.
+    int filon_nodes = 8;
+    int filon_panels = 8;
     double fe5d_correction_points = 0.1;
     // Use the exact symmetries z <-> 1 - z (quark <-> antiquark) and
     // angle <-> -angle (reflection): integrate z over [z_min, 1/2] and the angle
@@ -63,8 +74,8 @@ struct Sampling {
     // The variables of the Python code.
     static Sampling python() {
         Sampling s;
-        s.log_sizes = s.relative_coordinates = s.log_relative = s.log_Mqq = s.symmetries =
-            s.fe5d_by_parts = false;
+        s.log_sizes = s.relative_coordinates = s.log_relative = s.log_Mqq = s.symmetries = false;
+        s.fe5d_method = FE5DMethod::original;
         return s;
     }
 };
@@ -170,30 +181,61 @@ StructureFunctions fe4d_structure_functions(const Kinematics &k, const Dipole &d
     return detail::to_structure_functions(k, integrate(f, limits, settings), factor);
 }
 
+// True if every dipole at this rapidity is 1 (a transparent target), checked
+// on sizes covering the integration range.
+template <class DipoleAtY>
+bool transparent(const DipoleAtY &dipole, const IntegrationLimits &lim) {
+    for (int i = 0; i <= 64; ++i) {
+        const double r = lim.r_min * std::pow(2 * lim.r_max / lim.r_min, i / 64.0);
+        if (dipole.S(r) != 1.0) return false;
+    }
+    return true;
+}
+
 template <class Dipole>
 StructureFunctions fe5d_structure_functions(const Kinematics &k, const Dipole &dipole,
                                             bool largeNc, const IntegrationSettings &settings,
                                             const Sampling &sampling = {},
                                             const IntegrationLimits &lim = {}) {
+    using Method = Sampling::FE5DMethod;
     const auto coords = detail::fe_coordinates(sampling);
     const double factor = sampling.symmetries ? 4 : 1;
     const auto M_scale = sampling.log_Mqq ? Axis::Scale::log : Axis::Scale::linear;
     Limits limits = detail::fe_pair_axes(lim, sampling);
     limits.push_back(detail::z_axis(lim, sampling));
 
-    if (!sampling.fe5d_by_parts) {
+    // Rapidity at M_qq^2 = W^2 (xP = 1).
+    const double Q2 = k.Q * k.Q;
+    const double Y_at_W2 = std::log(k.x0 * (k.W2() + Q2) / (IntegrationLimits::Mqq_sq_max(k) + Q2));
+    Method method = sampling.fe5d_method;
+    if (method == Method::automatic)
+        method = dipole.Y_min() > Y_at_W2 ? Method::by_parts : Method::filon;
+
+    if (method == Method::filon) {
+        const FE5DFilonIntegrand<Dipole> f(k, dipole, largeNc, coords, lim.r_min, lim.r_max,
+                                           sampling.filon_nodes, sampling.filon_panels);
+        return detail::to_structure_functions(k, integrate(f, limits, settings), factor);
+    }
+
+    if (method == Method::original) {
         const FE5DIntegrand<Dipole> f(k, dipole, largeNc, coords, lim.r_min, lim.r_max);
         limits.push_back(
             {IntegrationLimits::Mqq_sq_min(k), IntegrationLimits::Mqq_sq_max(k), M_scale});
         return detail::to_structure_functions(k, integrate(f, limits, settings), factor);
     }
 
-    // Boundary term: the FE 4D integrand at the rapidity of M_qq^2 = W^2.
-    const double Q2 = k.Q * k.Q;
-    const double Y_at_W2 = std::log(k.x0 * (k.W2() + Q2) / (IntegrationLimits::Mqq_sq_max(k) + Q2));
-    const FE4DIntegrand<Dipole> boundary(k, dipole, Y_at_W2, largeNc, coords, lim.r_min, lim.r_max);
-    const StructureFunctions sf_boundary =
-        detail::to_structure_functions(k, integrate(boundary, limits, settings), factor);
+    // By parts. Boundary term: the FE 4D integrand at the rapidity of
+    // M_qq^2 = W^2. It vanishes if the target is transparent there (as with
+    // LargeXExtrapolation, where xP = 1 means N = 0); integrating zero would
+    // only waste Cuhre's evaluations on an unreachable relative accuracy.
+    StructureFunctions sf_boundary;
+    const bool with_boundary = !transparent(dipole.at(Y_at_W2), lim);
+    if (with_boundary) {
+        const FE4DIntegrand<Dipole> boundary(k, dipole, Y_at_W2, largeNc, coords, lim.r_min,
+                                             lim.r_max);
+        sf_boundary =
+            detail::to_structure_functions(k, integrate(boundary, limits, settings), factor);
+    }
 
     // Correction, over the part of the M_qq^2 range where the dipole depends on it.
     const FE5DCorrectionIntegrand<Dipole> correction(k, dipole, largeNc, coords, lim.r_min,
@@ -203,8 +245,10 @@ StructureFunctions fe5d_structure_functions(const Kinematics &k, const Dipole &d
     if (!(M_hi > M_lo)) return sf_boundary;
     limits.push_back({M_lo, M_hi, M_scale});
     IntegrationSettings correction_settings = settings;
-    correction_settings.vegas.mcpoints = std::max(
-        1000LL, static_cast<long long>(sampling.fe5d_correction_points * settings.vegas.mcpoints));
+    // Without a boundary term the correction is the whole result.
+    const double fraction = with_boundary ? sampling.fe5d_correction_points : 1.0;
+    correction_settings.vegas.mcpoints =
+        std::max(1000LL, static_cast<long long>(fraction * settings.vegas.mcpoints));
     const StructureFunctions sf_correction = detail::to_structure_functions(
         k, integrate(correction, limits, correction_settings), factor);
     return detail::sum(sf_boundary, sf_correction);

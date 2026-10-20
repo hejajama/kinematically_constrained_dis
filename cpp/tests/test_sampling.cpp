@@ -24,37 +24,6 @@ const Dipole &mv_dipole() {
     return dipole;
 }
 
-// Composite Gauss-Legendre rule: `panels` equal panels of `n` nodes on [a, b].
-// Nodes from Newton's method on the Legendre polynomial.
-double gauss_legendre(const std::function<double(double)> &f, double a, double b, int panels,
-                      int n = 12) {
-    std::vector<double> x(n), w(n);
-    for (int i = 0; i < n; ++i) {
-        double t = std::cos(dis::pi * (i + 0.75) / (n + 0.5)), dp = 0;
-        for (int iter = 0; iter < 100; ++iter) {
-            double p0 = 1, p1 = t;
-            for (int j = 2; j <= n; ++j) {
-                const double p2 = ((2 * j - 1) * t * p1 - (j - 1) * p0) / j;
-                p0 = p1;
-                p1 = p2;
-            }
-            dp = n * (t * p1 - p0) / (t * t - 1);
-            const double step = p1 / dp;
-            t -= step;
-            if (std::abs(step) < 1e-16) break;
-        }
-        x[i] = t;
-        w[i] = 2 / ((1 - t * t) * dp * dp);
-    }
-    double sum = 0;
-    const double h = (b - a) / panels;
-    for (int p = 0; p < panels; ++p) {
-        const double mid = a + (p + 0.5) * h;
-        for (int i = 0; i < n; ++i) sum += w[i] * h / 2 * f(mid + h / 2 * x[i]);
-    }
-    return sum;
-}
-
 }  // namespace
 
 TEST_CASE("gauss_legendre helper integrates exactly") {
@@ -162,6 +131,10 @@ TEST_CASE("FE 5D by parts: boundary term + correction = the M_qq^2 integral") {
     }
 }
 
+TEST_CASE("Sampling defaults: automatic FE 5D method") {
+    CHECK(dis::Sampling{}.fe5d_method == dis::Sampling::FE5DMethod::automatic);
+}
+
 TEST_CASE("Sampling::python() turns every option off") {
     const auto s = dis::Sampling::python();
     CHECK(!s.log_sizes);
@@ -169,5 +142,5 @@ TEST_CASE("Sampling::python() turns every option off") {
     CHECK(!s.log_relative);
     CHECK(!s.log_Mqq);
     CHECK(!s.symmetries);
-    CHECK(!s.fe5d_by_parts);
+    CHECK(s.fe5d_method == dis::Sampling::FE5DMethod::original);
 }

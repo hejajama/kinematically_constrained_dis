@@ -29,8 +29,11 @@
 
 #include <algorithm>
 #include <cmath>
+#include <stdexcept>
+#include <vector>
 
 #include "constants.hpp"
+#include "filon.hpp"
 #include "quadrupole.hpp"
 #include "special_functions.hpp"
 #include "wavefunctions.hpp"
@@ -352,6 +355,146 @@ private:
     FECoordinates coords_;
     double up_min_, up_max_;
     double dY_;
+};
+
+// The FE 5D cross section with its M_qq^2 integral done by a Filon rule.
+//
+// At fixed u, u', theta and z the M_qq^2 integral of FE5DIntegrand is, with
+// s = k^2 = z (1-z) M_qq^2 - mf^2,
+//
+//   (1/4pi) int_0^{K^2} ds J0(r sqrt(s)) T(Y(s)),    K^2 = z (1-z) W^2 - mf^2,
+//
+// times the prefactor; only the target amplitude T depends on M_qq^2. This
+// class computes that integral at each point and so is a 4D integrand, in the
+// variables of FE4DIntegrand. J0 can oscillate many times over the range,
+// but T is smooth, so:
+//
+//  - the rapidity range Y(K^2) <= Y <= Y(0) is split at the dipole's
+//    breakpoints, where T may have a kink;
+//  - on a piece where the dipole does not depend on Y, T is constant and the
+//    integral of J0 is exact (one evaluation of T);
+//  - on the other pieces T is evaluated at `nodes` Chebyshev points and
+//    interpolated (barycentric formula), then integrated against J0 with a
+//    cubic Filon rule on `panels` panels (see filon.hpp). Nodes and panels are
+//    equally spaced in Y for xP < x0 (BK evolution is smooth in Y) and in xP
+//    for xP > x0 (where an extrapolated dipole is a smooth function of x).
+//
+// The cost is that of `nodes` evaluations of T per varying piece, about
+// 8-16 times FE4DIntegrand, and the result is as smooth in u, u', theta, z as
+// the FE 4D integrand: no oscillating M_qq^2 dimension is left for the
+// integrator. This does not rely on T being constant anywhere, unlike the
+// integration by parts.
+template <class Dipole>
+class FE5DFilonIntegrand {
+public:
+    static constexpr int ndim = 4;
+    static constexpr int ncomp = 2;
+
+    FE5DFilonIntegrand(const Kinematics &kin, const Dipole &dipole, bool largeNc,
+                       FECoordinates coords = FECoordinates::polar, double up_min = 0,
+                       double up_max = INFINITY, int nodes = 8, int panels = 8)
+        : kin_(kin), dipole_(dipole), largeNc_(largeNc), coords_(coords), up_min_(up_min),
+          up_max_(up_max), nodes_(nodes), panels_(panels), breakpoints_(dipole.Y_breakpoints()) {
+        if (nodes_ < 2 || panels_ < 1)
+            throw std::invalid_argument("FE5DFilonIntegrand: needs nodes >= 2 and panels >= 1");
+    }
+
+    LT evaluate(const DipolePair &d, double z) const {
+        const double zz = z * (1 - z), m2 = kin_.mf * kin_.mf, Q2 = kin_.Q * kin_.Q;
+        const double W2 = kin_.W2();
+        const double s_max = zz * W2 - m2;
+        if (!(s_max > 0)) return {0, 0};
+
+        const double c = kin_.x0 * (W2 + Q2);
+        auto Y_of_s = [&](double s) { return std::log(c / ((s + m2) / zz + Q2)); };
+        auto s_of_Y = [&](double Y) { return zz * (c * std::exp(-Y) - Q2) - m2; };
+        const double r = std::sqrt(d.r2);
+        auto target = [&](double Y) {
+            return detail::target_amplitude(dipole_.at(Y), d, z, largeNc_);
+        };
+
+        // Pieces of the rapidity range between breakpoints; Y decreases with s.
+        std::vector<double> edges = {Y_of_s(s_max), Y_of_s(0)};
+        for (double b : breakpoints_)
+            if (b > edges[0] && b < edges[1]) edges.push_back(b);
+        std::sort(edges.begin(), edges.end());
+
+        double integral = 0;
+        std::vector<double> Y_node(nodes_), T_node(nodes_), weight(nodes_);
+        for (std::size_t e = 0; e + 1 < edges.size(); ++e) {
+            const double Ya = edges[e], Yb = edges[e + 1];
+            if (Yb <= dipole_.Y_min() || Ya >= dipole_.Y_max()) {
+                // T constant: int J0 ds exactly.
+                integral += target(0.5 * (Ya + Yb)) *
+                            (j0_moment_antiderivative(0, s_of_Y(Ya), r) -
+                             j0_moment_antiderivative(0, s_of_Y(Yb), r));
+                continue;
+            }
+            // The variable T is smooth in: the rapidity Y for xP < x0, where the
+            // dipole comes from BK evolution in Y, and xP itself for xP > x0,
+            // where a dipole is extrapolated as a function of x (and Y would
+            // stretch it exponentially).
+            const bool in_x = Yb <= 0;
+            auto v_of_Y = [&](double Y) { return in_x ? kin_.x0 * std::exp(-Y) : Y; };
+            auto Y_of_v = [&](double v) { return in_x ? std::log(kin_.x0 / v) : v; };
+            const double va = v_of_Y(Ya), vb = v_of_Y(Yb);
+
+            // Chebyshev-Lobatto nodes in v and their barycentric weights.
+            const double mid = 0.5 * (va + vb), half = 0.5 * (vb - va);
+            for (int k = 0; k < nodes_; ++k) {
+                Y_node[k] = mid + half * std::cos(pi * k / (nodes_ - 1));  // in v
+                T_node[k] = target(Y_of_v(Y_node[k]));
+                weight[k] = (k % 2 ? -1.0 : 1.0) * (k == 0 || k == nodes_ - 1 ? 0.5 : 1.0);
+            }
+            auto interpolate = [&](double v) {
+                double num = 0, den = 0;
+                for (int k = 0; k < nodes_; ++k) {
+                    const double diff = v - Y_node[k];
+                    if (diff == 0) return T_node[k];
+                    num += weight[k] / diff * T_node[k];
+                    den += weight[k] / diff;
+                }
+                return num / den;
+            };
+            // Panels equally spaced in v.
+            for (int p = 0; p < panels_; ++p) {
+                const double s_1 = s_of_Y(Y_of_v(va + (vb - va) * p / panels_));
+                const double s_2 = s_of_Y(Y_of_v(va + (vb - va) * (p + 1) / panels_));
+                const double s_a = std::min(s_1, s_2), s_b = std::max(s_1, s_2);
+                const auto w = filon_weights(s_a, s_b, r);
+                const double s_c = 0.5 * (s_a + s_b), h = 0.5 * (s_b - s_a);
+                for (int j = 0; j < 4; ++j)
+                    integral += w[j] * interpolate(v_of_Y(Y_of_s(s_c + h * filon_nodes[j])));
+            }
+        }
+
+        const LT pre = detail::fe_prefactor(kin_, d, z);
+        const double factor = integral / (4 * pi);
+        return {pre.L * factor, pre.T * factor};
+    }
+
+    LT evaluate(double u, double up, double z, double theta) const {
+        return evaluate(DipolePair::polar(u, up, theta), z);
+    }
+
+    void operator()(const double *x, double *f) const {
+        f[0] = f[1] = 0;
+        DipolePair pair;
+        const double jac = detail::read_pair(coords_, x, up_min_, up_max_, pair);
+        if (jac == 0) return;
+        const LT v = evaluate(pair, x[3]);
+        f[0] = jac * v.L;
+        f[1] = jac * v.T;
+    }
+
+private:
+    Kinematics kin_;
+    const Dipole &dipole_;
+    bool largeNc_;
+    FECoordinates coords_;
+    double up_min_, up_max_;
+    int nodes_, panels_;
+    std::vector<double> breakpoints_;
 };
 
 }  // namespace dis

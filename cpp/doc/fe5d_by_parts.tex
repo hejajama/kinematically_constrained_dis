@@ -265,8 +265,13 @@ In the C++ code (\texttt{cpp/}), the boundary term is \texttt{FE4DIntegrand}
 constructed with $Y = \ln x_0$, and the correction is
 \texttt{FE5DCorrectionIntegrand} in \texttt{src/integrands.hpp}. They are
 combined in \texttt{fe5d\_structure\_functions} in
-\texttt{src/cross\_sections.hpp}. The option \texttt{-{}-no-by-parts} integrates
-the original form \eqref{eq:sigma5d} instead.
+\texttt{src/cross\_sections.hpp}. The option \texttt{-{}-fe5d-method original}
+integrates the original form \eqref{eq:sigma5d} instead. When the dipole depends
+on rapidity all the way to $\xP = 1$ (as with \texttt{-{}-large-x-power}), the
+correction \eqref{eq:correction} extends over the whole $\Mqq$ range and the
+advantage of this form is largely lost; the code then integrates the $\Mqq$
+integral at each point with a Filon rule instead (\texttt{-{}-fe5d-method auto},
+the default).
 
 The derivative is a central finite difference,
 \begin{equation}
