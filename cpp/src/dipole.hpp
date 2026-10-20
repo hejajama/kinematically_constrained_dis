@@ -131,10 +131,10 @@ private:
 
 // Extends a dipole to x > x0, i.e. to Y = ln(x0 / x) < 0, as
 //
-//   N(r, x) = N(r, x0) (1 - x)^power,
+//   N(r, x) = N(r, x0) [(1 - x) / (1 - x0)]^power,
 //
-// so that the target becomes transparent (N = 0, S = 1) at x = 1. For Y >= 0
-// it is the base dipole unchanged. The base dipole's AtRapidity must provide
+// which is continuous at x = x0 and makes the target transparent (N = 0,
+// S = 1) at x = 1. For Y >= 0 it is the base dipole unchanged. The base dipole's AtRapidity must provide
 // N(r) as well as S(r) (BKDipole does). x0 must be the x0 that defines Y in
 // the cross sections (Kinematics::x0).
 template <class Base>
@@ -165,7 +165,7 @@ public:
         }
         const double x = x0_ * std::exp(-Y);
         a.at_ = base_.at(0.0);
-        a.factor_ = x < 1 ? std::pow(1 - x, power_) : 0.0;
+        a.factor_ = x < 1 ? std::pow((1 - x) / (1 - x0_), power_) : 0.0;
         return a;
     }
 

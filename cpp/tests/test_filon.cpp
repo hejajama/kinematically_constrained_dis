@@ -76,7 +76,7 @@ TEST_CASE("filon_weights integrate J0 times a cubic exactly") {
         }
 }
 
-TEST_CASE("LargeXExtrapolation: N(r, x) = N(r, x0) (1 - x)^power for x > x0") {
+TEST_CASE("LargeXExtrapolation: N(r, x) = N(r, x0) [(1 - x) / (1 - x0)]^power for x > x0") {
     const Extrapolated ext(mv_dipole(), kin.x0, 4.0);
     for (double r : {0.01, 0.5, 3.0}) {
         // Y >= 0: the BK dipole itself.
@@ -84,7 +84,10 @@ TEST_CASE("LargeXExtrapolation: N(r, x) = N(r, x0) (1 - x)^power for x > x0") {
         CHECK(ext.at(0.0).S(r) == mv_dipole().at(0.0).S(r));
         // x = 0.3 > x0: Y = ln(x0 / 0.3) < 0.
         const double Y = std::log(kin.x0 / 0.3);
-        CHECK(ext.at(Y).N(r) == doctest::Approx(mv_dipole().at(0.0).N(r) * std::pow(0.7, 4)));
+        CHECK(ext.at(Y).N(r) ==
+              doctest::Approx(mv_dipole().at(0.0).N(r) * std::pow(0.7 / (1 - kin.x0), 4)));
+        // Continuous at x = x0.
+        CHECK(ext.at(-1e-12).N(r) == doctest::Approx(mv_dipole().at(0.0).N(r)).epsilon(1e-10));
         // x = 1: transparent.
         CHECK(ext.at(std::log(kin.x0)).S(r) == 1.0);
     }

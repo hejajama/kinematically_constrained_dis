@@ -44,7 +44,7 @@ void usage(const char *prog) {
         << "  --sigma0 S       GeV^-2 (2*2.57*18.81)\n"
         << "  --x0 X           initial x of the BK evolution (0.01)\n"
         << "  --largeNc        large-Nc quadrupole (FE rows only)\n"
-        << "  --large-x-power P   for x > x0 use N(r, x) = N(r, x0) (1 - x)^P (default: the\n"
+        << "  --large-x-power P   for x > x0 use N(r, x) = N(r, x0) [(1-x)/(1-x0)]^P (default: the\n"
         << "                   dipole stays at x0); affects FE_5D only\n"
         << "  --Qs0, --gamma, --ec   accepted for compatibility, unused (taken from the BK file)\n"
         << "\n"

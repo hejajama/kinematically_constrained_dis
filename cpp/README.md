@@ -37,7 +37,7 @@ cpp/build/bin/dis_xs --bkfile data/mv.dat --xB 1e-3 --mcpoints 100000
 - `--mcpoints N`, `--seed S`, `--nbatch`, `--iterations`, `--warmup`: Vegas settings; seed `0` selects Sobol
   quasi-random numbers;
 - `--interpolation bicubic|bilinear`: the dipole interpolation;
-- `--large-x-power P`: for x > x0, use N(r, x) = N(r, x0)(1 − x)^P instead of keeping the dipole at x0 (affects
+- `--large-x-power P`: for x > x0, use N(r, x) = N(r, x0)[(1 − x)/(1 − x0)]^P instead of keeping the dipole at x0 (affects
   FE_5D only, the only quantity that evaluates the dipole at xP > x0);
 - `--fe5d-method auto|by-parts|filon|original`, `--filon-nodes N`, `--filon-panels N`: how FE_5D's M² integral is
   done (see below);
