@@ -1,0 +1,290 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{amsmath,amssymb}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{booktabs}
+\usepackage[colorlinks=true,linkcolor=blue,urlcolor=blue]{hyperref}
+
+\newcommand{\Mqq}{M_{q\bar q}^2}
+\newcommand{\dd}{\mathrm{d}}
+\newcommand{\xP}{x_{\mathbb{P}}}
+
+\title{The finite-energy 5D cross section\\integrated by parts in $\Mqq$}
+\author{}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+  The finite-energy (FE) constrained DIS cross section with the dipole evolved
+  to the rapidity of $\xP$ is a five-dimensional integral whose $\Mqq$ integrand
+  oscillates over the whole kinematic range. Integrating by parts in $\Mqq$
+  rewrites it exactly as the four-dimensional FE cross section with the dipole
+  at $\xP = 1$, plus a correction proportional to the rapidity derivative of
+  the target amplitude. The correction vanishes wherever the dipole does not
+  depend on rapidity, which for a BK solution starting at $x_0$ is most of the
+  $\Mqq$ range. Numerically, this reduces the Monte Carlo error at a fixed
+  number of points by a factor 12--17, and it makes adaptive cubature
+  practical.
+\end{abstract}
+
+\section{The cross section}
+
+We follow the implementation in
+\texttt{BK\_FE\_5D\_evolve\_in\_xP.py}. For one quark flavour of mass $m$ and
+polarization $\lambda = L, T$,
+\begin{equation}
+  \sigma_\lambda^{\text{5D}}
+  = \int \dd u \, \dd u' \, \dd\theta \, \dd z
+    \int_{4m^2}^{W^2} \dd\Mqq \;
+    P_\lambda(u, u', \theta, z) \;
+    T\big(Y(\Mqq)\big) \;
+    \Theta\!\left(\Mqq - \frac{m^2}{z(1-z)}\right)
+    \frac{z(1-z)}{4\pi} \, J_0(k r) ,
+  \label{eq:sigma5d}
+\end{equation}
+where $u$ and $u'$ are the dipole sizes in the amplitude and its conjugate,
+$\theta$ is the angle between them, and
+\begin{align}
+  r^2 &= |\mathbf{u} - \mathbf{u}'|^2 = u^2 + u'^2 - 2 u u' \cos\theta , &
+  k^2 &= z(1-z) \, \Mqq - m^2 , \\
+  W^2 &= Q^2 \left(\frac{1}{x_B} - 1\right) , &
+  Y(\Mqq) &= \ln \frac{x_0}{\xP} , \qquad
+  \xP = \frac{\Mqq + Q^2}{W^2 + Q^2} .
+\end{align}
+The prefactor collects everything that does not depend on the target:
+\begin{equation}
+  P_\lambda(u, u', \theta, z)
+  = \frac{\sigma_0}{2} \, \frac{1}{4\pi} \,
+    \frac{2\pi \, u u'}{z(1-z)} \,
+    \big|\psi_\lambda(u, u', \theta, z)\big|^2 ,
+\end{equation}
+with $|\psi_\lambda|^2$ the product of the light-cone wavefunction and its
+conjugate. The target amplitude
+\begin{equation}
+  T(Y) = 1 - S_Y(u) - S_Y(u') + S_{4,Y}(u, u', \theta, z)
+\end{equation}
+is built from the dipole $S_Y$ and the quadrupole $S_{4,Y}$, all at rapidity
+$Y$.
+
+The structure that matters below is that \textbf{only $T$ depends on $\Mqq$},
+through the rapidity $Y(\Mqq)$, and that the phase-space kernel is $J_0(kr)$
+with $k^2$ linear in $\Mqq$.
+
+For comparison, the 4D cross section with the dipole evolved to $x_B$ is
+\begin{equation}
+  \sigma_\lambda^{\text{4D}}[Y]
+  = \int \dd u \, \dd u' \, \dd\theta \, \dd z \;
+    P_\lambda(u, u', \theta, z) \; T(Y) \;
+    \frac{\zeta J_1(\zeta)}{2\pi r^2} ,
+  \qquad
+  \zeta = r \sqrt{z(1-z) \, M_{\max}^2 - m^2} ,
+  \label{eq:sigma4d}
+\end{equation}
+with $M_{\max}^2 = Q^2 (1 - x_B)/x_B = W^2$ and the integrand set to zero where
+the square root is not real. \texttt{BK\_FE\_4D\_evolve\_in\_xB.py} uses
+$Y = \ln(x_0/x_B)$; here the rapidity is left as an argument.
+
+\section{Integration by parts}
+
+Fix $u$, $u'$, $\theta$ and $z$. The $\Theta$ function starts the $\Mqq$
+integral at the threshold $\Mqq = m^2/[z(1-z)] \geq 4m^2$, where $k = 0$. The
+upper limit $\Mqq = W^2$ corresponds to $k = K$, with
+\begin{equation}
+  K^2 = z(1-z) \, W^2 - m^2 .
+\end{equation}
+If $K^2 \leq 0$ the integrand vanishes, and there is nothing to do. Otherwise,
+change variables to $s = k^2$, so that $\dd s = z(1-z) \, \dd\Mqq$. The
+$\Mqq$ integral in \eqref{eq:sigma5d} becomes
+\begin{equation}
+  I \equiv \int_{4m^2}^{W^2} \dd\Mqq \;
+    \Theta(\ldots) \, \frac{z(1-z)}{4\pi} \, J_0(kr) \, T
+  = \frac{1}{4\pi} \int_0^{K^2} \dd s \; J_0\big(\sqrt{s}\, r\big) \, T .
+\end{equation}
+
+The kernel has an elementary antiderivative in $s$. From
+$\frac{\dd}{\dd x} \big[ x J_1(x) \big] = x J_0(x)$ it follows that
+\begin{equation}
+  F(s) \equiv \frac{2\sqrt{s}\, J_1(\sqrt{s}\, r)}{r} ,
+  \qquad
+  \frac{\dd F}{\dd s} = J_0\big(\sqrt{s}\, r\big) ,
+  \qquad
+  F(0) = 0 .
+\end{equation}
+Integrating by parts,
+\begin{equation}
+  I = \frac{1}{4\pi} \Big[ F(s) \, T \Big]_{0}^{K^2}
+    - \frac{1}{4\pi} \int_0^{K^2} \dd s \; F(s) \, \frac{\dd T}{\dd s} .
+\end{equation}
+The lower boundary term vanishes because $F(0) = 0$. In the remaining integral,
+$\dd s \, (\dd T / \dd s) = \dd\Mqq \, (\dd T / \dd \Mqq)$, and by the chain rule
+\begin{equation}
+  \frac{\dd T}{\dd \Mqq}
+  = \frac{\dd T}{\dd Y} \, \frac{\dd Y}{\dd \Mqq}
+  = - \frac{1}{\Mqq + Q^2} \, \frac{\dd T}{\dd Y} .
+\end{equation}
+Therefore
+\begin{equation}
+  \boxed{
+  I = \frac{K J_1(K r)}{2\pi r} \, T(Y_W)
+    + \frac{1}{4\pi} \int \dd\Mqq \;
+      \frac{2 k J_1(k r)}{r} \,
+      \frac{1}{\Mqq + Q^2} \,
+      \frac{\dd T}{\dd Y}\bigg|_{Y(\Mqq)}
+  }
+  \label{eq:ibp}
+\end{equation}
+where the integral runs over the same range as before, from threshold to $W^2$,
+and $Y_W = Y(W^2) = \ln x_0$, the rapidity at $\xP = 1$.
+
+\section{Result}
+
+\paragraph{The boundary term is the 4D cross section.}
+With $\zeta = K r$, the first term of \eqref{eq:ibp} is
+\begin{equation}
+  \frac{K J_1(K r)}{2\pi r} = \frac{\zeta J_1(\zeta)}{2\pi r^2} ,
+  \qquad
+  \zeta = r \sqrt{z(1-z) \, W^2 - m^2} ,
+\end{equation}
+which is exactly the kernel of \eqref{eq:sigma4d}, because $M_{\max}^2 = W^2$.
+Multiplying by $P_\lambda$ and integrating over $u$, $u'$, $\theta$ and $z$
+gives
+\begin{equation}
+  \boxed{
+  \sigma_\lambda^{\text{5D}}
+  = \sigma_\lambda^{\text{4D}}\big[Y = \ln x_0\big]
+  + \Delta\sigma_\lambda
+  }
+\end{equation}
+with the correction
+\begin{equation}
+  \begin{split}
+  \Delta\sigma_\lambda
+  = \int \dd u \, \dd u' \, \dd\theta \, \dd z \, \dd\Mqq \;
+    &P_\lambda(u, u', \theta, z) \;
+    \Theta\!\left(\Mqq - \frac{m^2}{z(1-z)}\right) \\
+    &\times \frac{1}{4\pi} \, \frac{2 k J_1(k r)}{r} \,
+    \frac{1}{\Mqq + Q^2} \,
+    \frac{\dd T}{\dd Y}\bigg|_{Y(\Mqq)} .
+  \end{split}
+  \label{eq:correction}
+\end{equation}
+
+\paragraph{Interpretation.}
+The 5D cross section equals the 4D one evaluated with the target at $\xP = 1$,
+plus a term driven by how fast the evolution changes the target amplitude,
+$\partial T / \partial Y$, weighted by a smooth kernel. At $\xP = 1$ we have
+$Y = \ln x_0 < 0$. A BK solution starting at $x_0$ is not evolved backwards,
+and the code evaluates the dipole at $Y < 0$ at its initial condition $Y = 0$.
+So the boundary term is the 4D cross section with the unevolved dipole.
+
+\paragraph{The correction lives at small $\Mqq$.}
+The derivative $\dd T / \dd Y$ vanishes wherever the dipole does not depend on
+$Y$. For a BK solution tabulated in $Y \in [Y_{\min}, Y_{\max}]$, with the
+dipole frozen outside, the integrand of \eqref{eq:correction} is non-zero only
+for
+\begin{equation}
+  M^2(Y_{\max}) \leq \Mqq \leq M^2(Y_{\min}) ,
+  \qquad
+  M^2(Y) = x_0 \left(W^2 + Q^2\right) e^{-Y} - Q^2 .
+\end{equation}
+With $Y_{\min} = 0$, the upper end corresponds to $\xP = x_0$. For
+$Q^2 = 2\ \text{GeV}^2$, $x_B = 10^{-3}$ and $x_0 = 0.01$, the correction
+covers $\Mqq \lesssim 18\ \text{GeV}^2$, while the original integral extends
+to $W^2 \approx 2000\ \text{GeV}^2$.
+
+\paragraph{Validity.}
+Integration by parts requires $T$ to be absolutely continuous in $\Mqq$, not
+smooth. Freezing the dipole at the edges of its rapidity range is continuous;
+$\dd T / \dd Y$ then jumps there, which is harmless. The kernel of the
+correction is regular at $r \to 0$, where $2kJ_1(kr)/r \to k^2$.
+
+The derivation assumes that $T$ is the only $\Mqq$-dependent factor and that
+the kernel is $J_0(kr)$ with $k^2$ linear in $\Mqq$. If either changes, for
+example through an $\Mqq$-dependent factor elsewhere, the derivation has to be
+redone.
+
+\section{Why this helps numerically}
+
+At fixed $u$, $u'$, $\theta$, $z$, the original integrand oscillates in $\Mqq$
+through $J_0(kr)$ over the whole range up to $W^2$. Integrated over $\Mqq$,
+these oscillations produce the kernel $\zeta J_1(\zeta)/(2\pi r^2)$ of the 4D
+cross section. That kernel is sharply peaked at $r = 0$, with a width of about
+$1/\sqrt{z(1-z)W^2}$, roughly $0.05\ \text{GeV}^{-1}$ in the example above. The
+peak emerges from a near-cancellation between large positive and negative
+contributions. A Monte Carlo estimate samples both and has a correspondingly
+large variance.
+
+After the integration by parts, that cancellation is done analytically, in the
+antiderivative $F(s)$. What is left to integrate numerically is
+\begin{itemize}
+  \item the 4D boundary term. Its peak at $r = 0$ is handled by integrating over
+        $\mathbf{u}$ and the relative vector $\mathbf{r} = \mathbf{u} -
+        \mathbf{u}'$ in polar coordinates, with $|\mathbf{r}|$ on a logarithmic
+        scale, instead of over $u$, $u'$ and $\theta$;
+  \item the 5D correction, over a short $\Mqq$ range where $k$ is small and the
+        kernel barely oscillates.
+\end{itemize}
+
+Table~\ref{tab:numbers} shows the effect for $Q^2 = 2\ \text{GeV}^2$,
+$x_B = 10^{-3}$, $m = 0.14\ \text{GeV}$, $Z_f^2 = 2/3$, the MV-initial-condition
+BK solution of \texttt{data/mv.dat}, and the finite-$N_c$ quadrupole. The
+numbers are structure functions $F_\lambda = Q^2 \sigma_\lambda/(4\pi^2
+\alpha_{\text{em}})$.
+\begin{table}[h]
+  \centering
+  \small
+  \begin{tabular}{lll}
+    \toprule
+    & $F_L$ & $F_T$ \\
+    \midrule
+    Vegas, $10^6$ points, original form          & $0.0752 \pm 0.0020$ & $0.2712 \pm 0.0044$ \\
+    Vegas, $10^6$ points, integrated by parts    & $0.07620 \pm 0.00012$ & $0.27574 \pm 0.00038$ \\
+    \quad of which the boundary term            & $0.06184 \pm 0.00012$ & $0.24603 \pm 0.00038$ \\
+    \quad of which the correction               & $0.014362 \pm 0.000006$ & $0.029712 \pm 0.000011$ \\
+    Cuhre, $\epsilon_{\text{rel}} = 10^{-4}$, integrated by parts & $0.076391 \pm 0.000006$ & $0.276422 \pm 0.000025$ \\
+    Python (vegas), mean of three runs of $10^7$ points & $0.0761 \pm 0.0005$ & $0.2769 \pm 0.0011$ \\
+    \bottomrule
+  \end{tabular}
+  \caption{FE 5D structure functions. Both Vegas results use the same
+    integration variables (relative coordinates, see above) and $10^6$ points
+    per iteration for each integral; they differ only in the integration by
+    parts. Vegas errors are statistical. The Cuhre
+    error is its own estimate, which covered the change to a ten times smaller
+    $\epsilon_{\text{rel}}$. The Python error is the scatter of the three runs,
+    about twice the error vegas reports for one run.}
+  \label{tab:numbers}
+\end{table}
+
+\section{Implementation}
+
+In the C++ code (\texttt{cpp/}), the boundary term is \texttt{FE4DIntegrand}
+constructed with $Y = \ln x_0$, and the correction is
+\texttt{FE5DCorrectionIntegrand} in \texttt{src/integrands.hpp}. They are
+combined in \texttt{fe5d\_structure\_functions} in
+\texttt{src/cross\_sections.hpp}. The option \texttt{-{}-no-by-parts} integrates
+the original form \eqref{eq:sigma5d} instead.
+
+The derivative is a central finite difference,
+\begin{equation}
+  \frac{\dd T}{\dd Y} \approx
+  \frac{T(Y_+) - T(Y_-)}{Y_+ - Y_-} ,
+  \qquad
+  Y_\pm = \operatorname{clamp}\!\left(Y \pm h, \; Y_{\min}, \; Y_{\max}\right) ,
+  \quad h = 10^{-4} ,
+\end{equation}
+taken as zero when $Y_+ \le Y_-$. It vanishes identically where the dipole is
+frozen, and it needs nothing from the dipole model except its values and its
+rapidity range, so it works with any interpolation of the BK solution. Its
+error is about $10^{-8}$ relative.
+
+A unit test (\texttt{tests/test\_sampling.cpp}) checks \eqref{eq:ibp} directly.
+For fixed $u$, $u'$, $\theta$, $z$, it computes the original $\Mqq$ integral and
+the boundary term plus the correction integral with high-order composite
+Gauss--Legendre quadrature in $k$. The two agree to $10^{-7}$ relative, for both
+polarizations and for finite and large $N_c$.
+
+\end{document}
